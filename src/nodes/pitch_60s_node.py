@@ -1,0 +1,286 @@
+"""
+黄金60秒Pitch节点
+根据完整的BP结构生成黄金60秒pitch
+"""
+
+import json
+import os
+import re
+from datetime import datetime
+from typing import Dict, Any, List
+from json.decoder import JSONDecodeError
+
+from .base_node import BaseNode
+from ..prompts import SYSTEM_PROMPT_60S_PITCH
+from ..utils.text_processing import (
+    remove_reasoning_from_output,
+    clean_json_tags,
+    extract_clean_response
+)
+
+
+class Pitch60sNode(BaseNode):
+    """黄金60秒Pitch节点"""
+    
+    def __init__(self, llm_client):
+        """
+        初始化黄金60秒Pitch节点
+        
+        Args:
+            llm_client: LLM客户端
+        """
+        super().__init__(llm_client, "Pitch60sNode")
+    
+    def validate_input(self, input_data: Any) -> bool:
+        """验证输入数据"""
+        if isinstance(input_data, dict):
+            required_fields = ["business_idea", "bp_structure"]
+            if not all(field in input_data for field in required_fields):
+                return False
+            bp_structure = input_data.get("bp_structure", [])
+            if not isinstance(bp_structure, list):
+                return False
+            # 验证每个段落都有title和content
+            for para in bp_structure:
+                if not isinstance(para, dict):
+                    return False
+                if "title" not in para or "content" not in para:
+                    return False
+            return True
+        return False
+    
+    def generate_pitch(self, business_idea: str, bp_structure: List[Dict[str, str]]) -> Dict[str, Any]:
+        """
+        生成黄金60秒pitch
+        
+        Args:
+            business_idea: 商业创意
+            bp_structure: BP结构列表，每个元素包含title和content
+            
+        Returns:
+            Pitch结果字典，包含：
+            - painpoint_resonance: 痛点共鸣部分
+            - team_advantages: 团队优势部分
+            - call_to_action: 召唤行动部分
+            - full_pitch: 完整的60秒pitch文本
+        """
+        input_data = {
+            "business_idea": business_idea,
+            "bp_structure": bp_structure
+        }
+        return self.run(input_data)
+    
+    def run(self, input_data: Any, **kwargs) -> Dict[str, Any]:
+        """
+        调用LLM生成黄金60秒pitch
+        
+        Args:
+            input_data: 包含business_idea和bp_structure的字典
+            **kwargs: 额外参数
+            
+        Returns:
+            Pitch结果字典
+        """
+        try:
+            if not self.validate_input(input_data):
+                raise ValueError("输入数据格式错误，需要包含business_idea和bp_structure字段")
+            
+            business_idea = input_data["business_idea"]
+            bp_structure = input_data["bp_structure"]
+            
+            self.log_info(f"正在生成黄金60秒pitch，BP结构包含 {len(bp_structure)} 个段落")
+            
+            # 准备输入数据
+            formatted_input = {
+                "business_idea": business_idea,
+                "bp_structure": bp_structure
+            }
+            
+            # 将输入转换为JSON字符串
+            message = json.dumps(formatted_input, ensure_ascii=False)
+            
+            # 调用LLM
+            response = self.llm_client.invoke(SYSTEM_PROMPT_60S_PITCH, message)
+            
+            if not response:
+                raise ValueError("LLM返回空响应")
+            
+            # 处理输出
+            pitch_result = self.process_output(response)
+            
+            self.log_info("黄金60秒pitch生成成功")
+            return pitch_result
+            
+        except Exception as e:
+            self.log_error(f"生成黄金60秒pitch失败: {str(e)}")
+            raise
+    
+    def process_output(self, output: Any) -> Dict[str, Any]:
+        """
+        处理LLM输出，解析JSON并验证
+        
+        Args:
+            output: LLM原始输出
+            
+        Returns:
+            解析后的pitch结果字典
+        """
+        original_output = output
+        
+        try:
+            # 如果输出已经是字典，直接使用
+            if isinstance(output, dict):
+                cleaned_output = output
+            else:
+                # 转换为字符串
+                if not isinstance(output, str):
+                    output = str(output)
+                
+                # 清理输出
+                cleaned_output = remove_reasoning_from_output(output)
+                cleaned_output = clean_json_tags(cleaned_output)
+                
+                # 移除控制字符（除了换行、回车、制表符）
+                cleaned_output = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', cleaned_output)
+            
+            # 尝试解析JSON
+            pitch_result = None
+            
+            # 策略1: 如果cleaned_output是字符串，尝试直接解析
+            if isinstance(cleaned_output, str):
+                try:
+                    pitch_result = json.loads(cleaned_output)
+                except JSONDecodeError:
+                    # 策略2: 尝试从original_output解析（可能更完整）
+                    if isinstance(original_output, str):
+                        original_cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', original_output)
+                        try:
+                            pitch_result = json.loads(original_cleaned)
+                        except JSONDecodeError:
+                            # 策略3: 使用extract_clean_response提取JSON
+                            extracted = extract_clean_response(original_output)
+                            if extracted:
+                                pitch_result = json.loads(extracted)
+                            else:
+                                raise ValueError("无法从输出中提取有效的JSON")
+            else:
+                # cleaned_output已经是字典
+                pitch_result = cleaned_output
+            
+            # 验证必需字段
+            if not isinstance(pitch_result, dict):
+                debug_file = self._save_debug_output(original_output, cleaned_output)
+                error_msg = f"Pitch结果不是字典格式，而是 {type(pitch_result)}。调试文件已保存到: {debug_file}"
+                self.log_error(error_msg)
+                raise ValueError(error_msg)
+            
+            # 验证必需字段
+            required_fields = ["painpoint_resonance", "team_advantages", "call_to_action", "full_pitch"]
+            missing_fields = [field for field in required_fields if field not in pitch_result]
+            if missing_fields:
+                debug_file = self._save_debug_output(original_output, cleaned_output)
+                error_msg = f"Pitch结果缺少必需字段: {', '.join(missing_fields)}。调试文件已保存到: {debug_file}"
+                self.log_error(error_msg)
+                raise ValueError(error_msg)
+            
+            # 验证painpoint_resonance结构
+            painpoint_resonance = pitch_result.get("painpoint_resonance", {})
+            if not isinstance(painpoint_resonance, dict):
+                pitch_result["painpoint_resonance"] = {"selected_dimensions": [], "content": ""}
+            else:
+                if "selected_dimensions" not in painpoint_resonance:
+                    pitch_result["painpoint_resonance"]["selected_dimensions"] = []
+                if "content" not in painpoint_resonance:
+                    pitch_result["painpoint_resonance"]["content"] = ""
+            
+            # 验证team_advantages结构
+            team_advantages = pitch_result.get("team_advantages", {})
+            if not isinstance(team_advantages, dict):
+                pitch_result["team_advantages"] = {"selected_advantages": [], "content": ""}
+            else:
+                if "selected_advantages" not in team_advantages:
+                    pitch_result["team_advantages"]["selected_advantages"] = []
+                if "content" not in team_advantages:
+                    pitch_result["team_advantages"]["content"] = ""
+            
+            # 验证call_to_action结构
+            call_to_action = pitch_result.get("call_to_action", {})
+            if not isinstance(call_to_action, dict):
+                pitch_result["call_to_action"] = {"target_audience": "", "action": "", "content": ""}
+            else:
+                if "target_audience" not in call_to_action:
+                    pitch_result["call_to_action"]["target_audience"] = ""
+                if "action" not in call_to_action:
+                    pitch_result["call_to_action"]["action"] = ""
+                if "content" not in call_to_action:
+                    pitch_result["call_to_action"]["content"] = ""
+            
+            # 设置默认值
+            if "full_pitch" not in pitch_result or not pitch_result["full_pitch"]:
+                # 如果没有full_pitch，尝试组合生成
+                parts = []
+                if painpoint_resonance.get("content"):
+                    parts.append(painpoint_resonance["content"])
+                if team_advantages.get("content"):
+                    parts.append(team_advantages["content"])
+                if call_to_action.get("content"):
+                    parts.append(call_to_action["content"])
+                pitch_result["full_pitch"] = " ".join(parts)
+            
+            return pitch_result
+            
+        except ValueError:
+            # 重新抛出ValueError
+            raise
+        except Exception as e:
+            debug_file = self._save_debug_output(original_output, cleaned_output if 'cleaned_output' in locals() else None)
+            error_msg = f"处理Pitch输出时发生错误: {str(e)}。调试文件已保存到: {debug_file}"
+            self.log_error(error_msg)
+            raise ValueError(error_msg)
+    
+    def _save_debug_output(self, original_output: Any, cleaned_output: Any) -> str:
+        """
+        保存调试输出到临时文件
+        
+        Args:
+            original_output: 原始输出
+            cleaned_output: 清理后的输出
+            
+        Returns:
+            保存的文件路径
+        """
+        try:
+            # 生成文件名
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            filename = f"60s_pitch_debug_{timestamp}.txt"
+            filepath = os.path.join("/tmp", filename)
+            
+            # 确保 /tmp 目录存在
+            os.makedirs("/tmp", exist_ok=True)
+            
+            # 写入文件
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write("=" * 80 + "\n")
+                f.write("60s Pitch Node - 输出处理失败调试信息\n")
+                f.write("=" * 80 + "\n\n")
+                
+                f.write("时间: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "\n\n")
+                
+                f.write("-" * 80 + "\n")
+                f.write("原始输出 (original_output):\n")
+                f.write("-" * 80 + "\n")
+                f.write(str(original_output))
+                f.write("\n\n")
+                
+                if cleaned_output is not None:
+                    f.write("-" * 80 + "\n")
+                    f.write("清理后输出 (cleaned_output):\n")
+                    f.write("-" * 80 + "\n")
+                    f.write(str(cleaned_output))
+                    f.write("\n\n")
+            
+            return filepath
+        except Exception as e:
+            self.log_error(f"保存调试文件失败: {str(e)}")
+            return "/tmp/60s_pitch_debug_error.txt"
+

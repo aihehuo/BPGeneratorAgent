@@ -1,6 +1,6 @@
 """
-Deep Search Agent主类
-整合所有模块，实现完整的深度搜索流程
+BP Generation Agent主类
+整合所有模块，实现完整的商业计划书生成流程
 """
 
 import json
@@ -10,7 +10,7 @@ from typing import Optional, Dict, Any, List
 
 from .llms import DeepSeekLLM, OpenAILLM, QwenLLM, BaseLLM
 from .nodes import (
-    ReportStructureNode,
+    BPStructureNode,
     FirstSearchNode, 
     ReflectionNode,
     FirstSummaryNode,
@@ -22,12 +22,12 @@ from .tools import tavily_search
 from .utils import Config, load_config, format_search_results_for_prompt
 
 
-class DeepSearchAgent:
-    """Deep Search Agent主类"""
+class BPGenerationAgent:
+    """BP Generation Agent主类"""
     
     def __init__(self, config: Optional[Config] = None):
         """
-        初始化Deep Search Agent
+        初始化BP Generation Agent
         
         Args:
             config: 配置对象，如果不提供则自动加载
@@ -47,7 +47,7 @@ class DeepSearchAgent:
         # 确保输出目录存在
         os.makedirs(self.config.output_dir, exist_ok=True)
         
-        print(f"Deep Search Agent 已初始化")
+        print(f"BP Generation Agent 已初始化")
         print(f"使用LLM: {self.llm_client.get_model_info()}")
     
     def _initialize_llm(self) -> BaseLLM:
@@ -78,24 +78,24 @@ class DeepSearchAgent:
         self.reflection_summary_node = ReflectionSummaryNode(self.llm_client)
         self.report_formatting_node = ReportFormattingNode(self.llm_client)
     
-    def research(self, query: str, save_report: bool = True) -> str:
+    def generate_bp(self, business_idea: str, save_report: bool = True) -> str:
         """
-        执行深度研究
+        生成商业计划书
         
         Args:
-            query: 研究查询
+            business_idea: 商业创意
             save_report: 是否保存报告到文件
             
         Returns:
-            最终报告内容
+            最终商业计划书内容
         """
         print(f"\n{'='*60}")
-        print(f"开始深度研究: {query}")
+        print(f"开始生成商业计划书: {business_idea[:50]}...")
         print(f"{'='*60}")
         
         try:
-            # Step 1: 生成报告结构
-            self._generate_report_structure(query)
+            # Step 1: 生成BP结构
+            self._generate_bp_structure(business_idea)
             
             # Step 2: 处理每个段落
             self._process_paragraphs()
@@ -108,26 +108,26 @@ class DeepSearchAgent:
                 self._save_report(final_report)
             
             print(f"\n{'='*60}")
-            print("深度研究完成！")
+            print("商业计划书生成完成！")
             print(f"{'='*60}")
             
             return final_report
             
         except Exception as e:
-            print(f"研究过程中发生错误: {str(e)}")
+            print(f"生成过程中发生错误: {str(e)}")
             raise e
     
-    def _generate_report_structure(self, query: str):
-        """生成报告结构"""
-        print(f"\n[步骤 1] 生成报告结构...")
+    def _generate_bp_structure(self, business_idea: str):
+        """生成BP结构"""
+        print(f"\n[步骤 1] 生成BP结构...")
         
-        # 创建报告结构节点
-        report_structure_node = ReportStructureNode(self.llm_client, query)
+        # 创建BP结构节点
+        bp_structure_node = BPStructureNode(self.llm_client, business_idea)
         
         # 生成结构并更新状态
-        self.state = report_structure_node.mutate_state(state=self.state)
+        self.state = bp_structure_node.mutate_state(state=self.state)
         
-        print(f"报告结构已生成，共 {len(self.state.paragraphs)} 个段落:")
+        print(f"BP结构已生成，共 {len(self.state.paragraphs)} 个段落:")
         for i, paragraph in enumerate(self.state.paragraphs, 1):
             print(f"  {i}. {paragraph.title}")
     
@@ -296,7 +296,7 @@ class DeepSearchAgent:
         query_safe = "".join(c for c in self.state.query if c.isalnum() or c in (' ', '-', '_')).rstrip()
         query_safe = query_safe.replace(' ', '_')[:30]
         
-        filename = f"deep_search_report_{query_safe}_{timestamp}.md"
+        filename = f"bp_report_{query_safe}_{timestamp}.md"
         filepath = os.path.join(self.config.output_dir, filename)
         
         # 保存报告
@@ -307,7 +307,7 @@ class DeepSearchAgent:
         
         # 保存状态（如果配置允许）
         if self.config.save_intermediate_states:
-            state_filename = f"state_{query_safe}_{timestamp}.json"
+            state_filename = f"state_bp_{query_safe}_{timestamp}.json"
             state_filepath = os.path.join(self.config.output_dir, state_filename)
             self.state.save_to_file(state_filepath)
             print(f"状态已保存到: {state_filepath}")
@@ -327,15 +327,16 @@ class DeepSearchAgent:
         print(f"状态已保存到 {filepath}")
 
 
-def create_agent(config_file: Optional[str] = None) -> DeepSearchAgent:
+def create_bp_agent(config_file: Optional[str] = None) -> BPGenerationAgent:
     """
-    创建Deep Search Agent实例的便捷函数
+    创建BP Generation Agent实例的便捷函数
     
     Args:
         config_file: 配置文件路径
         
     Returns:
-        DeepSearchAgent实例
+        BPGenerationAgent实例
     """
     config = load_config(config_file)
-    return DeepSearchAgent(config)
+    return BPGenerationAgent(config)
+

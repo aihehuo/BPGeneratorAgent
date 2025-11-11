@@ -9,7 +9,7 @@ import sys
 # 添加项目根目录到Python路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from src import DeepSearchAgent, Config
+from src import DeepSearchAgent, Config, load_config
 from src.utils.config import print_config
 
 
@@ -20,12 +20,19 @@ def advanced_example():
     print("=" * 60)
     
     try:
-        # 自定义配置
+        # 先加载基础配置（包含API密钥）
+        print("正在加载基础配置...")
+        base_config = load_config()
+        
+        # 创建自定义配置（基于基础配置）
         print("正在创建自定义配置...")
         config = Config(
-            # 使用OpenAI而不是DeepSeek
-            default_llm_provider="openai",
-            openai_model="gpt-4o-mini",
+            # 使用DeepSeek（从配置文件加载）
+            default_llm_provider="deepseek",
+            deepseek_model=base_config.deepseek_model,
+            # 从基础配置加载API密钥
+            deepseek_api_key=base_config.deepseek_api_key,
+            tavily_api_key=base_config.tavily_api_key,
             # 自定义搜索参数
             max_search_results=5,  # 更多搜索结果
             max_reflections=3,     # 更多反思次数
@@ -33,12 +40,7 @@ def advanced_example():
             # 自定义输出
             output_dir="custom_reports",
             save_intermediate_states=True
-
         )
-        
-        # 从环境变量设置API密钥
-        config.openai_api_key = os.getenv("OPENAI_API_KEY")
-        config.tavily_api_key = os.getenv("TAVILY_API_KEY")
         
         if not config.validate():
             print("配置验证失败，请检查API密钥设置")
@@ -96,8 +98,8 @@ def state_management_example():
     print("=" * 60)
     
     try:
-        # 创建配置
-        config = Config.from_env()
+        # 加载配置
+        config = load_config()
         if not config.validate():
             print("配置验证失败")
             return
