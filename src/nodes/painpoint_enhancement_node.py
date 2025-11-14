@@ -15,7 +15,8 @@ from ..prompts import SYSTEM_PROMPT_PAINPOINT_ENHANCEMENT
 from ..utils.text_processing import (
     remove_reasoning_from_output,
     clean_json_tags,
-    extract_clean_response
+    extract_clean_response,
+    detect_language
 )
 
 
@@ -87,14 +88,29 @@ class PainpointEnhancementNode(BaseNode):
             para_title = painpoint_paragraph.get("title", "用户画像与痛点")
             self.log_info(f"正在加强痛点段落: {para_title}")
             
+            # 检测语言
+            detected_lang = detect_language(business_idea)
+            # 如果painpoint_paragraph的标题是英文，强制使用英文
+            if para_title:
+                if re.search(r'[a-zA-Z]', para_title) and not re.search(r'[\u4e00-\u9fff]', para_title):
+                    detected_lang = 'en'
+                elif re.search(r'[\u4e00-\u9fff]', para_title):
+                    detected_lang = 'zh'
+            
+            lang_instruction = ""
+            if detected_lang == 'en':
+                lang_instruction = "\n\n**CRITICAL LANGUAGE REQUIREMENT: The business_idea and painpoint_paragraph are in ENGLISH. You MUST generate ALL output (including enhanced_content, dimension names, etc.) in ENGLISH ONLY. Use English dimension names like 'Urgency', 'Frequency', 'High Economic Cost', etc. DO NOT use Chinese characters anywhere in your output.**\n\n"
+            else:
+                lang_instruction = "\n\n**CRITICAL LANGUAGE REQUIREMENT: The business_idea and painpoint_paragraph are in CHINESE. You MUST generate ALL output (including enhanced_content, dimension names, etc.) in CHINESE ONLY. Use Chinese dimension names like '紧迫性', '频发性', '高经济代价', etc. DO NOT use English in your output.**\n\n"
+            
             # 准备输入数据
             formatted_input = {
                 "business_idea": business_idea,
                 "painpoint_paragraph": painpoint_paragraph
             }
             
-            # 将输入转换为JSON字符串
-            message = json.dumps(formatted_input, ensure_ascii=False)
+            # 将输入转换为JSON字符串，并在前面添加语言指令
+            message = lang_instruction + json.dumps(formatted_input, ensure_ascii=False)
             
             # 调用LLM
             response = self.llm_client.invoke(SYSTEM_PROMPT_PAINPOINT_ENHANCEMENT, message)

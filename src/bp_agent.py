@@ -17,6 +17,7 @@ from .nodes import (
     PPTGenerationNode,
 )
 from .utils.config import Config, load_config
+from .utils.text_processing import detect_language
 
 
 class BPGenerationAgent:
@@ -360,6 +361,22 @@ class BPGenerationAgent:
                 business_idea, bp_structure, iteration_history, evaluation_result
             )
 
+            # 从iteration_history中提取ppt_result（如果存在）
+            if not ppt_result:
+                for hist in iteration_history:
+                    if hist.get("iteration") == "ppt_generation":
+                        ppt_result = hist.get("ppt_result")
+                        if ppt_result:
+                            break
+            
+            # 调试信息：检查ppt_result
+            if ppt_result:
+                slides = ppt_result.get("slides", [])
+                if slides:
+                    print(f"\n检测到PPT结果，包含 {len(slides)} 页幻灯片")
+                else:
+                    print("\n警告: PPT结果存在但slides为空")
+
             if save_report:
                 output_path = output_file or self._build_default_filename(business_idea)
                 os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -369,7 +386,34 @@ class BPGenerationAgent:
                 print("Markdown已保存")
                 print("=" * 60)
                 print(f"输出文件: {output_path}")
+                
+                # 如果生成了PPT，保存到单独的文件
+                print(f"\n[DEBUG] 检查PPT保存条件:")
+                print(f"  - ppt_result存在: {ppt_result is not None}")
+                if ppt_result:
+                    slides = ppt_result.get("slides", [])
+                    print(f"  - slides存在: {slides is not None}")
+                    print(f"  - slides长度: {len(slides) if slides else 0}")
+                    if slides and len(slides) > 0:
+                        print(f"  - 条件满足，开始保存PPT设计文件...")
+                        try:
+                            ppt_file_path = self._save_ppt_design_file(
+                                business_idea, bp_structure, ppt_result, output_path
+                            )
+                            if ppt_file_path:
+                                print(f"PPT设计文件已保存: {ppt_file_path}")
+                            else:
+                                print("警告: PPT设计文件保存失败")
+                        except Exception as e:
+                            print(f"保存PPT设计文件时出错: {e}")
+                            import traceback
+                            traceback.print_exc()
+                    else:
+                        print("提示: PPT结果存在但slides为空，跳过PPT设计文件保存")
+                else:
+                    print("提示: 未生成PPT内容，跳过PPT设计文件保存")
             else:
+                print("\n[DEBUG] save_report为False，跳过文件保存")
                 output_path = None
 
             return {
@@ -399,6 +443,264 @@ class BPGenerationAgent:
         return os.path.join(
             self.config.output_dir, f"bp_structure_{safe_idea}_{timestamp}.md"
         )
+    
+    def _save_ppt_design_file(
+        self,
+        business_idea: str,
+        bp_structure: List[Dict[str, str]],
+        ppt_result: Dict[str, Any],
+        main_report_path: str,
+    ) -> Optional[str]:
+        """
+        保存PPT设计文件，包含详细的视觉设计指令
+        
+        Args:
+            business_idea: 商业创意
+            bp_structure: BP结构
+            ppt_result: PPT生成结果
+            main_report_path: 主报告文件路径
+            
+        Returns:
+            保存的文件路径，如果失败则返回None
+        """
+        try:
+            # 基于主报告路径生成PPT文件路径
+            base_name = os.path.splitext(os.path.basename(main_report_path))[0]
+            ppt_dir = os.path.dirname(main_report_path)
+            ppt_file_path = os.path.join(ppt_dir, f"{base_name}_ppt_design.md")
+            
+            print(f"\n[DEBUG] 准备保存PPT设计文件:")
+            print(f"  - 主报告路径: {main_report_path}")
+            print(f"  - PPT文件路径: {ppt_file_path}")
+            print(f"  - 目录存在: {os.path.exists(ppt_dir)}")
+            
+            # 检测语言
+            detected_lang = detect_language(business_idea)
+            is_english = detected_lang == 'en'
+            print(f"  - 检测到的语言: {'英文' if is_english else '中文'}")
+            
+            # 生成PPT设计内容
+            print(f"  - 开始生成PPT设计内容...")
+            ppt_content = self._format_ppt_design_prompt(
+                business_idea, bp_structure, ppt_result, is_english
+            )
+            print(f"  - PPT设计内容长度: {len(ppt_content)} 字符")
+            
+            # 保存文件
+            print(f"  - 正在写入文件...")
+            with open(ppt_file_path, "w", encoding="utf-8") as f:
+                f.write(ppt_content)
+            
+            # 验证文件是否成功创建
+            if os.path.exists(ppt_file_path):
+                file_size = os.path.getsize(ppt_file_path)
+                print(f"  - 文件已成功创建，大小: {file_size} 字节")
+                return ppt_file_path
+            else:
+                print(f"  - 错误: 文件创建后不存在!")
+                return None
+        except Exception as e:
+            print(f"保存PPT设计文件失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def _format_ppt_design_prompt(
+        self,
+        business_idea: str,
+        bp_structure: List[Dict[str, str]],
+        ppt_result: Dict[str, Any],
+        is_english: bool = False,
+    ) -> str:
+        """
+        格式化PPT设计提示词，包含详细的视觉设计指令
+        
+        Args:
+            business_idea: 商业创意
+            bp_structure: BP结构
+            ppt_result: PPT生成结果
+            is_english: 是否为英文
+            
+        Returns:
+            格式化后的PPT设计提示词
+        """
+        slides = ppt_result.get("slides", [])
+        
+        if is_english:
+            content = "# PowerPoint Slide Design Brief\n\n"
+            content += "## Business Idea\n\n"
+            content += f"{business_idea.strip()}\n\n"
+            content += "---\n\n"
+            content += "## Design Requirements\n\n"
+            content += "Please create a professional 10-slide PowerPoint presentation based on the following content. "
+            content += "Each slide should follow modern design principles with clear visual hierarchy, appropriate use of whitespace, and consistent branding.\n\n"
+            content += "### Design Guidelines:\n\n"
+            content += "1. **Color Scheme**: Use a professional color palette (suggested: primary brand color + complementary colors, avoid too many colors)\n"
+            content += "2. **Typography**: Use clear, readable fonts (suggested: sans-serif for headings, serif or sans-serif for body text)\n"
+            content += "3. **Layout**: Maintain consistent margins and spacing across all slides\n"
+            content += "4. **Visual Elements**: Use icons, charts, and images appropriately to support the content\n"
+            content += "5. **Slide Transitions**: Keep transitions subtle and professional\n"
+            content += "6. **Data Visualization**: If slides contain data, use appropriate charts (bar, line, pie, etc.)\n"
+            content += "7. **Branding**: Include company/logo placement consistently (typically top-right or bottom-right)\n\n"
+            content += "---\n\n"
+            content += "## Slide Content and Design Specifications\n\n"
+            
+            for slide in slides:
+                slide_no = slide.get("slide_number", "?")
+                slide_title = slide.get("slide_title", "")
+                slide_point = slide.get("point", "")
+                slide_line = slide.get("line", "")
+                slide_reserved = slide.get("reserved", "")
+                
+                content += f"### Slide {slide_no}: {slide_title}\n\n"
+                
+                # Content specifications
+                content += "**Content to Include:**\n\n"
+                if slide_point:
+                    content += f"- **Main Point**: {slide_point}\n"
+                if slide_line:
+                    content += f"- **Supporting Line**: {slide_line}\n"
+                if slide_reserved:
+                    content += f"- **Reserved Hook**: {slide_reserved}\n"
+                
+                # Design specifications based on slide number
+                content += "\n**Design Specifications:**\n\n"
+                
+                if slide_no == 1:
+                    content += "- **Layout**: Title slide with large, bold title\n"
+                    content += "- **Visual**: Hero image or abstract background related to the business idea\n"
+                    content += "- **Typography**: Large title font (suggested: 48-60pt), subtitle in smaller font\n"
+                    content += "- **Color**: Use brand primary color prominently\n"
+                elif slide_no == 2:
+                    content += "- **Layout**: Problem statement slide\n"
+                    content += "- **Visual**: Use icons or illustrations to represent pain points\n"
+                    content += "- **Typography**: Clear heading with bullet points or numbered list\n"
+                    content += "- **Color**: Consider using contrasting colors to highlight problems\n"
+                elif slide_no in [3, 4, 5]:
+                    content += "- **Layout**: Content slide with clear sections\n"
+                    content += "- **Visual**: Use icons, charts, or diagrams to illustrate key concepts\n"
+                    content += "- **Typography**: Hierarchical text structure (heading, subheading, body)\n"
+                    content += "- **Color**: Maintain brand consistency\n"
+                elif slide_no in [6, 7, 8]:
+                    content += "- **Layout**: Feature or benefit-focused slide\n"
+                    content += "- **Visual**: Use comparison tables, before/after visuals, or feature icons\n"
+                    content += "- **Typography**: Emphasize key benefits with larger font or bold text\n"
+                    content += "- **Color**: Use accent colors to highlight important information\n"
+                elif slide_no == 9:
+                    content += "- **Layout**: Business model or financial slide\n"
+                    content += "- **Visual**: Use charts, graphs, or infographics to present data\n"
+                    content += "- **Typography**: Ensure numbers and data are clearly readable\n"
+                    content += "- **Color**: Use color coding for different data categories\n"
+                elif slide_no == 10:
+                    content += "- **Layout**: Call-to-action or closing slide\n"
+                    content += "- **Visual**: Strong visual element (CTA button, contact info, or closing image)\n"
+                    content += "- **Typography**: Large, bold call-to-action text\n"
+                    content += "- **Color**: Use high-contrast colors for CTA elements\n"
+                else:
+                    content += "- **Layout**: Standard content slide\n"
+                    content += "- **Visual**: Use appropriate icons or images to support content\n"
+                    content += "- **Typography**: Clear hierarchy with readable fonts\n"
+                    content += "- **Color**: Maintain brand consistency\n"
+                
+                content += "\n---\n\n"
+            
+            content += "## Additional Design Notes\n\n"
+            content += "- Ensure all slides maintain visual consistency\n"
+            content += "- Use high-quality images and graphics (avoid pixelated or low-resolution images)\n"
+            content += "- Keep text concise and readable (avoid overcrowding slides)\n"
+            content += "- Use animations sparingly and only when they add value\n"
+            content += "- Ensure good contrast between text and background colors for readability\n"
+            content += "- Consider accessibility: use alt text for images and ensure color-blind friendly palettes\n\n"
+            content += "---\n\n"
+            content += "*This design brief can be used as a prompt for AI tools like Claude, Midjourney, or other design tools to generate the actual PowerPoint slides.*\n"
+        else:
+            content = "# PowerPoint幻灯片设计说明\n\n"
+            content += "## 商业创意\n\n"
+            content += f"{business_idea.strip()}\n\n"
+            content += "---\n\n"
+            content += "## 设计要求\n\n"
+            content += "请根据以下内容创建专业的10页PowerPoint演示文稿。每页幻灯片应遵循现代设计原则，具有清晰的视觉层次、适当的留白和一致的品牌风格。\n\n"
+            content += "### 设计指南：\n\n"
+            content += "1. **配色方案**：使用专业的配色方案（建议：主品牌色+互补色，避免使用过多颜色）\n"
+            content += "2. **字体**：使用清晰易读的字体（建议：标题使用无衬线字体，正文使用衬线或无衬线字体）\n"
+            content += "3. **布局**：在所有幻灯片中保持一致的边距和间距\n"
+            content += "4. **视觉元素**：适当使用图标、图表和图片来支持内容\n"
+            content += "5. **幻灯片过渡**：保持过渡效果微妙且专业\n"
+            content += "6. **数据可视化**：如果幻灯片包含数据，使用适当的图表（柱状图、折线图、饼图等）\n"
+            content += "7. **品牌标识**：一致地放置公司/logo（通常在右上角或右下角）\n\n"
+            content += "---\n\n"
+            content += "## 幻灯片内容和设计规范\n\n"
+            
+            for slide in slides:
+                slide_no = slide.get("slide_number", "?")
+                slide_title = slide.get("slide_title", "")
+                slide_point = slide.get("point", "")
+                slide_line = slide.get("line", "")
+                slide_reserved = slide.get("reserved", "")
+                
+                content += f"### 第 {slide_no} 页：{slide_title}\n\n"
+                
+                # Content specifications
+                content += "**需要包含的内容：**\n\n"
+                if slide_point:
+                    content += f"- **要点**：{slide_point}\n"
+                if slide_line:
+                    content += f"- **支持性文字**：{slide_line}\n"
+                if slide_reserved:
+                    content += f"- **预留钩子**：{slide_reserved}\n"
+                
+                # Design specifications based on slide number
+                content += "\n**设计规范：**\n\n"
+                
+                if slide_no == 1:
+                    content += "- **布局**：标题页，使用大号粗体标题\n"
+                    content += "- **视觉**：与商业创意相关的英雄图片或抽象背景\n"
+                    content += "- **字体**：大号标题字体（建议：48-60pt），副标题使用较小字体\n"
+                    content += "- **颜色**：突出使用品牌主色\n"
+                elif slide_no == 2:
+                    content += "- **布局**：问题陈述页\n"
+                    content += "- **视觉**：使用图标或插图来代表痛点\n"
+                    content += "- **字体**：清晰的标题，配合项目符号或编号列表\n"
+                    content += "- **颜色**：考虑使用对比色来突出显示问题\n"
+                elif slide_no in [3, 4, 5]:
+                    content += "- **布局**：内容页，具有清晰的部分划分\n"
+                    content += "- **视觉**：使用图标、图表或图表来说明关键概念\n"
+                    content += "- **字体**：层次化的文本结构（标题、副标题、正文）\n"
+                    content += "- **颜色**：保持品牌一致性\n"
+                elif slide_no in [6, 7, 8]:
+                    content += "- **布局**：功能或优势聚焦页\n"
+                    content += "- **视觉**：使用对比表格、前后对比图或功能图标\n"
+                    content += "- **字体**：用较大字体或粗体强调关键优势\n"
+                    content += "- **颜色**：使用强调色来突出重要信息\n"
+                elif slide_no == 9:
+                    content += "- **布局**：商业模式或财务页\n"
+                    content += "- **视觉**：使用图表、图形或信息图来呈现数据\n"
+                    content += "- **字体**：确保数字和数据清晰可读\n"
+                    content += "- **颜色**：使用颜色编码来区分不同的数据类别\n"
+                elif slide_no == 10:
+                    content += "- **布局**：行动号召或结束页\n"
+                    content += "- **视觉**：强烈的视觉元素（CTA按钮、联系信息或结束图片）\n"
+                    content += "- **字体**：大号、粗体的行动号召文字\n"
+                    content += "- **颜色**：为CTA元素使用高对比度颜色\n"
+                else:
+                    content += "- **布局**：标准内容页\n"
+                    content += "- **视觉**：使用适当的图标或图片来支持内容\n"
+                    content += "- **字体**：清晰的层次结构和易读的字体\n"
+                    content += "- **颜色**：保持品牌一致性\n"
+                
+                content += "\n---\n\n"
+            
+            content += "## 其他设计注意事项\n\n"
+            content += "- 确保所有幻灯片保持视觉一致性\n"
+            content += "- 使用高质量的图片和图形（避免像素化或低分辨率图像）\n"
+            content += "- 保持文字简洁易读（避免幻灯片过于拥挤）\n"
+            content += "- 谨慎使用动画，仅在它们增加价值时使用\n"
+            content += "- 确保文本和背景颜色之间有良好的对比度以便阅读\n"
+            content += "- 考虑可访问性：为图片使用替代文本，确保色盲友好的调色板\n\n"
+            content += "---\n\n"
+            content += "*此设计说明可用作Claude、Midjourney或其他设计工具的提示词，以生成实际的PowerPoint幻灯片。*\n"
+        
+        return content
 
     def _format_bp_structure_to_markdown(
         self, bp_structure: List[Dict[str, str]], business_idea: str

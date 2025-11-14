@@ -16,7 +16,8 @@ from ..prompts import SYSTEM_PROMPT_BP_STRUCTURE, SYSTEM_PROMPT_BP_STRUCTURE_REG
 from ..utils.text_processing import (
     remove_reasoning_from_output,
     clean_json_tags,
-    extract_clean_response
+    extract_clean_response,
+    detect_language
 )
 
 
@@ -52,13 +53,21 @@ class BPStructureNode(StateMutationNode):
         try:
             self.log_info(f"正在为商业创意生成BP结构: {self.business_idea[:50]}...")
             
+            # 检测语言
+            detected_lang = detect_language(self.business_idea)
+            lang_instruction = ""
+            if detected_lang == 'en':
+                lang_instruction = "\n\n**CRITICAL LANGUAGE REQUIREMENT: The business_idea is in ENGLISH. You MUST generate ALL output (including title and content fields) in ENGLISH ONLY. Use English titles like 'User Persona & Pain Points', 'Solution', 'Minimum Viable Product (MVP)', etc. DO NOT use Chinese characters anywhere in your output.**\n\n"
+            else:
+                lang_instruction = "\n\n**CRITICAL LANGUAGE REQUIREMENT: The business_idea is in CHINESE. You MUST generate ALL output (including title and content fields) in CHINESE ONLY. Use Chinese titles like '用户画像与痛点', '解决方案', '最小可行产品（MVP）', etc. DO NOT use English titles or content.**\n\n"
+            
             # 准备输入数据，按照input_schema_bp_structure格式
             formatted_input = {
                 "business_idea": self.business_idea
             }
             
-            # 将输入转换为JSON字符串
-            message = json.dumps(formatted_input, ensure_ascii=False)
+            # 将输入转换为JSON字符串，并在前面添加语言指令
+            message = lang_instruction + json.dumps(formatted_input, ensure_ascii=False)
             
             # 调用LLM
             response = self.llm_client.invoke(SYSTEM_PROMPT_BP_STRUCTURE, message)
@@ -89,6 +98,25 @@ class BPStructureNode(StateMutationNode):
         try:
             self.log_info(f"正在根据反馈重新生成BP结构...")
             
+            # 检测语言（从business_idea和current_structure）
+            detected_lang = detect_language(self.business_idea)
+            # 如果current_structure有内容，也检查其语言
+            if current_structure and len(current_structure) > 0:
+                first_title = current_structure[0].get('title', '')
+                if first_title:
+                    # 如果标题是英文，强制使用英文
+                    if re.search(r'[a-zA-Z]', first_title) and not re.search(r'[\u4e00-\u9fff]', first_title):
+                        detected_lang = 'en'
+                    # 如果标题是中文，强制使用中文
+                    elif re.search(r'[\u4e00-\u9fff]', first_title):
+                        detected_lang = 'zh'
+            
+            lang_instruction = ""
+            if detected_lang == 'en':
+                lang_instruction = "\n\n**CRITICAL LANGUAGE REQUIREMENT: The business_idea and current_structure are in ENGLISH. You MUST generate ALL output (including title and content fields) in ENGLISH ONLY. Keep the same English titles from current_structure. DO NOT use Chinese characters anywhere in your output.**\n\n"
+            else:
+                lang_instruction = "\n\n**CRITICAL LANGUAGE REQUIREMENT: The business_idea and current_structure are in CHINESE. You MUST generate ALL output (including title and content fields) in CHINESE ONLY. Keep the same Chinese titles from current_structure. DO NOT use English titles or content.**\n\n"
+            
             # 准备输入数据，按照input_schema_bp_structure_regenerate格式
             formatted_input = {
                 "business_idea": self.business_idea,
@@ -97,8 +125,8 @@ class BPStructureNode(StateMutationNode):
                 "current_structure": current_structure
             }
             
-            # 将输入转换为JSON字符串
-            message = json.dumps(formatted_input, ensure_ascii=False)
+            # 将输入转换为JSON字符串，并在前面添加语言指令
+            message = lang_instruction + json.dumps(formatted_input, ensure_ascii=False)
             
             # 调用LLM
             response = self.llm_client.invoke(SYSTEM_PROMPT_BP_STRUCTURE_REGENERATE, message)

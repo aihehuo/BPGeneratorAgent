@@ -198,3 +198,77 @@ def format_search_results_for_prompt(search_results: List[Dict[str, Any]],
             formatted_results.append(truncated_content)
     
     return formatted_results
+
+
+def detect_language(text: str) -> str:
+    """
+    检测文本的主要语言
+    
+    Args:
+        text: 要检测的文本
+        
+    Returns:
+        'en' 表示英文，'zh' 表示中文
+    """
+    if not text or not text.strip():
+        return 'zh'  # 默认为中文
+    
+    text = text.strip()
+    
+    # 检查是否明确指定了语言
+    explicit_language_patterns = {
+        'en': [
+            r'\bin\s+english\b',
+            r'\benglish\b',
+            r'\buse\s+english\b',
+            r'\bgenerate\s+in\s+english\b',
+            r'\boutput\s+in\s+english\b',
+            r'用英文',
+            r'使用英文',
+            r'英文输出',
+        ],
+        'zh': [
+            r'\bin\s+chinese\b',
+            r'\bchinese\b',
+            r'\buse\s+chinese\b',
+            r'\bgenerate\s+in\s+chinese\b',
+            r'\boutput\s+in\s+chinese\b',
+            r'用中文',
+            r'使用中文',
+            r'中文输出',
+        ]
+    }
+    
+    text_lower = text.lower()
+    for lang, patterns in explicit_language_patterns.items():
+        for pattern in patterns:
+            if re.search(pattern, text_lower, re.IGNORECASE):
+                return lang
+    
+    # 统计中文字符和英文字符
+    chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
+    english_chars = len(re.findall(r'[a-zA-Z]', text))
+    total_chars = len(re.findall(r'[\u4e00-\u9fff\w]', text))
+    
+    if total_chars == 0:
+        return 'zh'  # 默认为中文
+    
+    # 计算比例
+    chinese_ratio = chinese_chars / total_chars if total_chars > 0 else 0
+    english_ratio = english_chars / total_chars if total_chars > 0 else 0
+    
+    # 如果中文字符占比超过30%，认为是中文
+    if chinese_ratio > 0.3:
+        return 'zh'
+    
+    # 如果英文字符占比超过50%，认为是英文
+    if english_ratio > 0.5:
+        return 'en'
+    
+    # 如果英文单词数量明显多于中文，认为是英文
+    english_words = len(re.findall(r'\b[a-zA-Z]{2,}\b', text))
+    if english_words > 5 and english_words > chinese_chars / 2:
+        return 'en'
+    
+    # 默认返回中文
+    return 'zh'

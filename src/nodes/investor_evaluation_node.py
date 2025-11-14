@@ -5,6 +5,7 @@
 
 import json
 import os
+import re
 from datetime import datetime
 from typing import Dict, Any, List
 from json.decoder import JSONDecodeError
@@ -14,7 +15,8 @@ from ..prompts import SYSTEM_PROMPT_INVESTOR_EVALUATION
 from ..utils.text_processing import (
     remove_reasoning_from_output,
     clean_json_tags,
-    extract_clean_response
+    extract_clean_response,
+    detect_language
 )
 
 
@@ -112,14 +114,33 @@ class InvestorEvaluationNode(BaseNode):
             
             self.log_info(f"正在从投资者角度评估整篇BP，共 {len(paragraphs)} 个段落...")
             
+            # 检测语言
+            detected_lang = detect_language(business_idea)
+            # 如果paragraphs有内容，也检查其语言
+            if paragraphs and len(paragraphs) > 0:
+                first_title = paragraphs[0].get('title', '')
+                if first_title:
+                    # 如果标题是英文，强制使用英文
+                    if re.search(r'[a-zA-Z]', first_title) and not re.search(r'[\u4e00-\u9fff]', first_title):
+                        detected_lang = 'en'
+                    # 如果标题是中文，强制使用中文
+                    elif re.search(r'[\u4e00-\u9fff]', first_title):
+                        detected_lang = 'zh'
+            
+            lang_instruction = ""
+            if detected_lang == 'en':
+                lang_instruction = "\n\n**CRITICAL LANGUAGE REQUIREMENT: The business_idea and paragraphs are in ENGLISH. You MUST generate ALL output (including all evaluation fields like market_size, replicability, competitive_barriers, unique_competitive_advantage, revenue_model, overall_assessment, concerns, suggestions, paragraph_specific_feedback, etc.) in ENGLISH ONLY. DO NOT use Chinese characters anywhere in your output.**\n\n"
+            else:
+                lang_instruction = "\n\n**CRITICAL LANGUAGE REQUIREMENT: The business_idea and paragraphs are in CHINESE. You MUST generate ALL output (including all evaluation fields) in CHINESE ONLY. DO NOT use English in your output.**\n\n"
+            
             # 准备输入数据（整篇BP）
             formatted_input = {
                 "business_idea": business_idea,
                 "paragraphs": paragraphs
             }
             
-            # 将输入转换为JSON字符串
-            message = json.dumps(formatted_input, ensure_ascii=False)
+            # 将输入转换为JSON字符串，并在前面添加语言指令
+            message = lang_instruction + json.dumps(formatted_input, ensure_ascii=False)
             
             # 调用LLM
             response = self.llm_client.invoke(SYSTEM_PROMPT_INVESTOR_EVALUATION, message)
