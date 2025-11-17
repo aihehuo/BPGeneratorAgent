@@ -4,6 +4,7 @@ BP Generation Agent
 """
 
 import os
+import traceback
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
@@ -15,6 +16,7 @@ from .nodes import (
     InvestorEvaluationNode,
     Pitch60sNode,
     PPTGenerationNode,
+    PartnerSearchNode,
 )
 from .utils.config import Config, load_config
 from .utils.text_processing import detect_language
@@ -36,8 +38,16 @@ class BPGenerationAgent:
 
         os.makedirs(self.config.output_dir, exist_ok=True)
 
+        # 检查爱合伙API密钥是否可用
+        self.aihehuo_available = bool(self.config.aihehuo_api_key)
+        if self.aihehuo_available:
+            print("✓ 爱合伙API密钥已配置，合伙人搜索功能可用")
+        else:
+            print("⚠ 爱合伙API密钥未配置，将跳过合伙人搜索功能")
+
         print("BP Generation Agent 已初始化")
         print(f"使用LLM: {self.llm_client.get_model_info()}")
+        print(f"输出目录: {self.config.output_dir}")
 
     def _initialize_llm(self) -> BaseLLM:
         """初始化LLM客户端"""
@@ -90,12 +100,29 @@ class BPGenerationAgent:
         investor_eval_node = InvestorEvaluationNode(self.llm_client)
         pitch_node = Pitch60sNode(self.llm_client)
         ppt_node = PPTGenerationNode(self.llm_client)
+        
+        # 初始化合伙人搜索节点（需要爱合伙API密钥）
+        partner_search_node = None
+        if self.aihehuo_available:
+            try:
+                partner_search_node = PartnerSearchNode(
+                    llm_client=self.llm_client,
+                    api_key=self.config.aihehuo_api_key,
+                    api_base=self.config.aihehuo_api_base
+                )
+                print("✓ 合伙人搜索节点已初始化")
+            except Exception as e:
+                print(f"警告: 初始化合伙人搜索节点失败: {e}，将跳过合伙人搜索")
+                self.aihehuo_available = False
+        else:
+            print("提示: 未配置爱合伙API密钥，将跳过合伙人搜索")
 
         bp_structure: Optional[List[Dict[str, str]]] = None
         evaluation_result: Optional[Dict[str, Any]] = None
         iteration_history: List[Dict[str, Any]] = []
         pitch_result: Optional[Dict[str, Any]] = None
         ppt_result: Optional[Dict[str, Any]] = None
+        partner_search_result: Optional[Dict[str, Any]] = None
 
         try:
             for iteration in range(self.max_iterations):
@@ -157,7 +184,10 @@ class BPGenerationAgent:
 
                         for idx, para in enumerate(bp_structure):
                             title = para.get("title", "").strip()
-                            if "用户画像" in title and "痛点" in title:
+                            if (
+                                ("用户画像" in title and "痛点" in title)
+                                or ("User Persona" in title and "Pain Point" in title)
+                            ):
                                 painpoint_para_index = idx
                                 painpoint_para = para
                                 break
@@ -338,6 +368,42 @@ class BPGenerationAgent:
                         except Exception as exc:
                             print(f"生成PPT草稿失败: {exc}")
 
+                        # ------------------------------------------------------------------
+                        # 搜索合伙人和投资人
+                        # ------------------------------------------------------------------
+                        if partner_search_node:
+                            print("\n" + "=" * 60)
+                            print("开始搜索合伙人和投资人")
+                            print("=" * 60)
+                            try:
+                                partner_search_result = partner_search_node.run(
+                                    input_data={
+                                        "business_idea": business_idea,
+                                        "bp_structure": bp_structure
+                                    },
+                                    partner_per_page=10,
+                                    investor_per_page=10,
+                                    wechat_reachable_only=True
+                                )
+                                iteration_history.append(
+                                    {"iteration": "partner_search", "partner_search_result": partner_search_result}
+                                )
+                                partner_count = partner_search_result.get("partner_count", 0)
+                                investor_count = partner_search_result.get("investor_count", 0)
+                                partner_query = partner_search_result.get("partner_search_query", "")
+                                investor_query = partner_search_result.get("investor_search_query", "")
+                                print(f"✓ 合伙人搜索完成，找到 {partner_count} 个合伙人，{investor_count} 个投资人")
+                                if partner_query:
+                                    print(f"  合伙人搜索查询: {partner_query}")
+                                if investor_query:
+                                    print(f"  投资人搜索查询: {investor_query}")
+                                if partner_count == 0 and investor_count == 0:
+                                    print("  警告: 未找到任何合伙人或投资人")
+                            except Exception as exc:
+                                print(f"搜索合伙人和投资人失败: {exc}")
+                                traceback.print_exc()
+                                partner_search_result = None
+
                     except Exception as exc:
                         print(f"投资者评估或重新生成失败: {exc}")
                         print("将使用BP评估通过的结构作为最终结构")
@@ -357,8 +423,40 @@ class BPGenerationAgent:
             # ----------------------------------------------------------------------
             # 构建Markdown并输出
             # ----------------------------------------------------------------------
+            # 从iteration_history中提取partner_search_result（如果存在）
+            if not partner_search_result:
+                for hist in iteration_history:
+                    if hist.get("iteration") == "partner_search":
+                        partner_search_result = hist.get("partner_search_result")
+                        if partner_search_result:
+                            break
+            
+            # 调试信息：检查partner_search_result
+            if partner_search_result:
+                partner_count = partner_search_result.get("partner_count", 0)
+                investor_count = partner_search_result.get("investor_count", 0)
+                partner_query = partner_search_result.get("partner_search_query", "")
+                investor_query = partner_search_result.get("investor_search_query", "")
+                print(f"\n[DEBUG] 合伙人搜索结果: {partner_count} 个合伙人, {investor_count} 个投资人")
+                print(f"[DEBUG] 合伙人搜索短语: {partner_query}")
+                print(f"[DEBUG] 投资人搜索短语: {investor_query}")
+            else:
+                print("\n[DEBUG] 合伙人搜索结果为空，将不会添加到报告中")
+                # 尝试从iteration_history中检查是否有搜索短语
+                for hist in iteration_history:
+                    if hist.get("iteration") == "partner_search":
+                        search_result = hist.get("partner_search_result")
+                        if search_result:
+                            partner_query = search_result.get("partner_search_query", "")
+                            investor_query = search_result.get("investor_search_query", "")
+                            if partner_query or investor_query:
+                                print(f"[DEBUG] 发现搜索短语但结果为空:")
+                                print(f"[DEBUG]   合伙人搜索短语: {partner_query}")
+                                print(f"[DEBUG]   投资人搜索短语: {investor_query}")
+                        break
+            
             markdown_content = self._build_markdown(
-                business_idea, bp_structure, iteration_history, evaluation_result
+                business_idea, bp_structure, iteration_history, evaluation_result, partner_search_result
             )
 
             # 从iteration_history中提取ppt_result（如果存在）
@@ -406,15 +504,35 @@ class BPGenerationAgent:
                                 print("警告: PPT设计文件保存失败")
                         except Exception as e:
                             print(f"保存PPT设计文件时出错: {e}")
-                            import traceback
                             traceback.print_exc()
                     else:
                         print("提示: PPT结果存在但slides为空，跳过PPT设计文件保存")
                 else:
                     print("提示: 未生成PPT内容，跳过PPT设计文件保存")
+                
+                # 保存人脉报告（合伙人搜索结果）
+                partner_report_path = None
+                if partner_search_result:
+                    partner_count = partner_search_result.get("partner_count", 0)
+                    investor_count = partner_search_result.get("investor_count", 0)
+                    partner_query = partner_search_result.get("partner_search_query", "")
+                    investor_query = partner_search_result.get("investor_search_query", "")
+                    if partner_count > 0 or investor_count > 0 or partner_query or investor_query:
+                        try:
+                            partner_report_path = self._save_partner_report(
+                                business_idea, partner_search_result, output_path
+                            )
+                            if partner_report_path:
+                                print(f"\n✓ 人脉报告已保存: {partner_report_path}")
+                            else:
+                                print("\n警告: 人脉报告保存失败")
+                        except Exception as e:
+                            print(f"\n保存人脉报告时出错: {e}")
+                            traceback.print_exc()
             else:
                 print("\n[DEBUG] save_report为False，跳过文件保存")
                 output_path = None
+                partner_report_path = None
 
             return {
                 "output_file": output_path,
@@ -424,6 +542,8 @@ class BPGenerationAgent:
                 "evaluation_result": evaluation_result,
                 "pitch_result": pitch_result,
                 "ppt_result": ppt_result,
+                "partner_search_result": partner_search_result,
+                "partner_report_file": partner_report_path if save_report and partner_search_result else None,
             }
 
         except Exception as exc:
@@ -501,7 +621,6 @@ class BPGenerationAgent:
                 return None
         except Exception as e:
             print(f"保存PPT设计文件失败: {e}")
-            import traceback
             traceback.print_exc()
             return None
     
@@ -728,6 +847,7 @@ class BPGenerationAgent:
         bp_structure: List[Dict[str, str]],
         iteration_history: List[Dict[str, Any]],
         evaluation_result: Dict[str, Any],
+        partner_search_result: Optional[Dict[str, Any]] = None,
     ) -> str:
         markdown_content = self._format_bp_structure_to_markdown(
             bp_structure, business_idea
@@ -906,6 +1026,10 @@ class BPGenerationAgent:
                             f"- **Reserved Hook**: {slide_reserved}\n"
                         )
                     markdown_content += "\n---\n\n"
+            
+            elif iteration_key == "partner_search":
+                # 合伙人搜索结果已经在最终评估结果之后单独添加，这里跳过
+                pass
 
         markdown_content += "\n## 最终评估结果\n\n"
         if evaluation_result.get("passed"):
@@ -925,8 +1049,289 @@ class BPGenerationAgent:
                 markdown_content += (
                     f"**修改建议**: {evaluation_result.get('suggestions')}\n\n"
                 )
-
+        
+        # 注意：合伙人搜索结果现在保存到单独的人脉报告文档中，不再添加到主BP报告
+        # 如果需要添加到主BP报告，可以取消下面的注释
+        # if partner_search_result:
+        #     partner_count = partner_search_result.get("partner_count", 0)
+        #     investor_count = partner_search_result.get("investor_count", 0)
+        #     partner_query = partner_search_result.get("partner_search_query", "")
+        #     investor_query = partner_search_result.get("investor_search_query", "")
+        #     if partner_count > 0 or investor_count > 0 or partner_query or investor_query:
+        #         markdown_content += self._format_partner_search_results(partner_search_result)
+        
         return markdown_content
+    
+    def _format_partner_search_results(self, partner_search_result: Dict[str, Any]) -> str:
+        """
+        格式化合伙人搜索结果为Markdown
+        
+        Args:
+            partner_search_result: 合伙人搜索结果
+            
+        Returns:
+            Markdown格式的合伙人搜索结果
+        """
+        content = "\n\n## 合伙人与投资人推荐\n\n"
+        
+        # 检测语言
+        partner_query = partner_search_result.get("partner_search_query", "")
+        is_english = detect_language(partner_query) == 'en' if partner_query else False
+        
+        if is_english:
+            content += "### Partner Search\n\n"
+            partner_query = partner_search_result.get("partner_search_query", "")
+            if partner_query:
+                content += f"**Search Query**: {partner_query}\n\n"
+            
+            partner_results = partner_search_result.get("partner_results", [])
+            partner_count = partner_search_result.get("partner_count", 0)
+            if partner_count > 0:
+                content += f"**Found {partner_count} Partners**:\n\n"
+                for i, partner in enumerate(partner_results[:10], 1):
+                    content += f"#### Partner {i}\n\n"
+                    content += f"- **User ID**: {partner.get('user_id', 'N/A')}\n"
+                    content += f"- **Name**: {partner.get('name', 'N/A')}\n"
+                    if partner.get('age_range'):
+                        content += f"- **Age Range**: {partner.get('age_range')}\n"
+                    elif partner.get('age'):
+                        age = partner.get('age')
+                        age_range = self._calculate_age_range(age)
+                        content += f"- **Age Range**: {age_range}\n"
+                    if partner.get('bio'):
+                        bio = partner.get('bio', '').strip()
+                        if bio:
+                            content += f"- **Bio**: {bio}\n"
+                    if partner.get('tags'):
+                        tags = partner.get('tags', [])
+                        if isinstance(tags, list):
+                            content += f"- **Tags**: {', '.join(tags[:5])}\n"
+                    content += "\n---\n\n"
+            else:
+                content += "No partners found.\n\n"
+            
+            content += "### Investor Search\n\n"
+            investor_query = partner_search_result.get("investor_search_query", "")
+            if investor_query:
+                content += f"**Search Query**: {investor_query}\n\n"
+            
+            investor_results = partner_search_result.get("investor_results", [])
+            investor_count = partner_search_result.get("investor_count", 0)
+            if investor_count > 0:
+                content += f"**Found {investor_count} Investors**:\n\n"
+                for i, investor in enumerate(investor_results[:10], 1):
+                    content += f"#### Investor {i}\n\n"
+                    content += f"- **User ID**: {investor.get('user_id', 'N/A')}\n"
+                    content += f"- **Name**: {investor.get('name', 'N/A')}\n"
+                    if investor.get('age_range'):
+                        content += f"- **Age Range**: {investor.get('age_range')}\n"
+                    elif investor.get('age'):
+                        age = investor.get('age')
+                        age_range = self._calculate_age_range(age)
+                        content += f"- **Age Range**: {age_range}\n"
+                    if investor.get('bio'):
+                        bio = investor.get('bio', '').strip()
+                        if bio:
+                            content += f"- **Bio**: {bio}\n"
+                    if investor.get('tags'):
+                        tags = investor.get('tags', [])
+                        if isinstance(tags, list):
+                            content += f"- **Tags**: {', '.join(tags[:5])}\n"
+                    content += "\n---\n\n"
+            else:
+                content += "No investors found.\n\n"
+        else:
+            content += "### 合伙人搜索\n\n"
+            partner_query = partner_search_result.get("partner_search_query", "")
+            if partner_query:
+                content += f"**搜索查询**: {partner_query}\n\n"
+            
+            partner_results = partner_search_result.get("partner_results", [])
+            partner_count = partner_search_result.get("partner_count", 0)
+            if partner_count > 0:
+                content += f"**找到 {partner_count} 个合伙人**:\n\n"
+                for i, partner in enumerate(partner_results[:10], 1):
+                    content += f"#### 合伙人 {i}\n\n"
+                    content += f"- **用户ID**: {partner.get('user_id', 'N/A')}\n"
+                    content += f"- **姓名**: {partner.get('name', 'N/A')}\n"
+                    if partner.get('age_range'):
+                        content += f"- **年龄段**: {partner.get('age_range')}\n"
+                    elif partner.get('age'):
+                        age = partner.get('age')
+                        age_range = self._calculate_age_range(age)
+                        content += f"- **年龄段**: {age_range}\n"
+                    if partner.get('bio'):
+                        bio = partner.get('bio', '').strip()
+                        if bio:
+                            content += f"- **简介**: {bio}\n"
+                    if partner.get('tags'):
+                        tags = partner.get('tags', [])
+                        if isinstance(tags, list):
+                            content += f"- **标签**: {', '.join(tags[:5])}\n"
+                    content += "\n---\n\n"
+            else:
+                content += "未找到合伙人。\n\n"
+            
+            content += "### 投资人搜索\n\n"
+            investor_query = partner_search_result.get("investor_search_query", "")
+            if investor_query:
+                content += f"**搜索查询**: {investor_query}\n\n"
+            
+            investor_results = partner_search_result.get("investor_results", [])
+            investor_count = partner_search_result.get("investor_count", 0)
+            if investor_count > 0:
+                content += f"**找到 {investor_count} 个投资人**:\n\n"
+                for i, investor in enumerate(investor_results[:10], 1):
+                    content += f"#### 投资人 {i}\n\n"
+                    content += f"- **用户ID**: {investor.get('user_id', 'N/A')}\n"
+                    content += f"- **姓名**: {investor.get('name', 'N/A')}\n"
+                    if investor.get('age_range'):
+                        content += f"- **年龄段**: {investor.get('age_range')}\n"
+                    elif investor.get('age'):
+                        age = investor.get('age')
+                        age_range = self._calculate_age_range(age)
+                        content += f"- **年龄段**: {age_range}\n"
+                    if investor.get('bio'):
+                        bio = investor.get('bio', '').strip()
+                        if bio:
+                            content += f"- **简介**: {bio}\n"
+                    if investor.get('tags'):
+                        tags = investor.get('tags', [])
+                        if isinstance(tags, list):
+                            content += f"- **标签**: {', '.join(tags[:5])}\n"
+                    content += "\n---\n\n"
+            else:
+                content += "未找到投资人。\n\n"
+        
+        return content
+    
+    def _save_partner_report(
+        self,
+        business_idea: str,
+        partner_search_result: Dict[str, Any],
+        main_report_path: str,
+    ) -> Optional[str]:
+        """
+        保存人脉报告到单独的文件
+        
+        Args:
+            business_idea: 商业创意
+            partner_search_result: 合伙人搜索结果
+            main_report_path: 主报告文件路径
+            
+        Returns:
+            人脉报告文件路径，如果失败则返回None
+        """
+        try:
+            # 基于主报告文件名生成人脉报告文件名
+            base_name = os.path.splitext(os.path.basename(main_report_path))[0]
+            report_dir = os.path.dirname(main_report_path)
+            
+            # 移除文件名中的"bp_structure_"前缀（如果存在）
+            if base_name.startswith("bp_structure_"):
+                base_name = base_name[len("bp_structure_"):]
+            
+            # 生成人脉报告文件名
+            partner_report_path = os.path.join(report_dir, f"partner_report_{base_name}.md")
+            
+            print(f"\n[DEBUG] 准备保存人脉报告:")
+            print(f"  - 主报告路径: {main_report_path}")
+            print(f"  - 人脉报告路径: {partner_report_path}")
+            print(f"  - 目录存在: {os.path.exists(report_dir)}")
+            
+            # 生成人脉报告内容
+            report_content = self._build_partner_report_content(
+                business_idea, partner_search_result
+            )
+            
+            print(f"  - 人脉报告内容长度: {len(report_content)} 字符")
+            
+            # 写入文件
+            print(f"  - 正在写入文件...")
+            with open(partner_report_path, "w", encoding="utf-8") as f:
+                f.write(report_content)
+            
+            if os.path.exists(partner_report_path):
+                file_size = os.path.getsize(partner_report_path)
+                print(f"  - 文件已成功创建，大小: {file_size} 字节")
+                return partner_report_path
+            else:
+                print(f"  - 错误: 文件创建后不存在!")
+                return None
+        except Exception as e:
+            print(f"保存人脉报告失败: {e}")
+            traceback.print_exc()
+            return None
+    
+    def _build_partner_report_content(
+        self,
+        business_idea: str,
+        partner_search_result: Dict[str, Any],
+    ) -> str:
+        """
+        构建人脉报告内容
+        
+        Args:
+            business_idea: 商业创意
+            partner_search_result: 合伙人搜索结果
+            
+        Returns:
+            人脉报告的Markdown内容
+        """
+        # 检测语言
+        is_english = detect_language(business_idea) == 'en'
+        
+        if is_english:
+            content = "# Partner & Investor Network Report\n\n"
+            content += f"## Business Idea\n\n"
+            content += f"{business_idea.strip()}\n\n"
+            content += "---\n\n"
+        else:
+            content = "# 人脉报告\n\n"
+            content += f"## 商业创意\n\n"
+            content += f"{business_idea.strip()}\n\n"
+            content += "---\n\n"
+        
+        # 添加合伙人搜索结果
+        content += self._format_partner_search_results(partner_search_result)
+        
+        # 添加生成时间
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if is_english:
+            content += f"\n\n---\n\n*Generated at: {timestamp}*\n"
+        else:
+            content += f"\n\n---\n\n*生成时间: {timestamp}*\n"
+        
+        return content
+    
+    def _calculate_age_range(self, age: int) -> str:
+        """
+        根据年龄计算年龄段
+        
+        Args:
+            age: 年龄
+            
+        Returns:
+            年龄段字符串
+        """
+        if age < 25:
+            return "20-24岁"
+        elif age < 30:
+            return "25-29岁"
+        elif age < 35:
+            return "30-34岁"
+        elif age < 40:
+            return "35-39岁"
+        elif age < 45:
+            return "40-44岁"
+        elif age < 50:
+            return "45-49岁"
+        elif age < 55:
+            return "50-54岁"
+        elif age < 60:
+            return "55-59岁"
+        else:
+            return "60岁以上"
 
 
 def create_bp_agent(config_file: Optional[str] = None) -> BPGenerationAgent:

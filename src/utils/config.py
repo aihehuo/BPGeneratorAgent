@@ -16,6 +16,8 @@ class Config:
     openai_api_key: Optional[str] = None
     qwen_api_key: Optional[str] = None
     tavily_api_key: Optional[str] = None
+    aihehuo_api_key: Optional[str] = None
+    aihehuo_api_base: Optional[str] = None
     
     # 模型配置
     default_llm_provider: str = "deepseek"  # deepseek, openai, 或 qwen
@@ -74,6 +76,8 @@ class Config:
                 openai_api_key=getattr(config_module, "OPENAI_API_KEY", None),
                 qwen_api_key=getattr(config_module, "QWEN_API_KEY", None),
                 tavily_api_key=getattr(config_module, "TAVILY_API_KEY", None),
+                aihehuo_api_key=getattr(config_module, "AIHEHUO_API_KEY", None),
+                aihehuo_api_base=getattr(config_module, "AIHEHUO_API_BASE", None),
                 default_llm_provider=getattr(config_module, "DEFAULT_LLM_PROVIDER", "deepseek"),
                 deepseek_model=getattr(config_module, "DEEPSEEK_MODEL", "deepseek-chat"),
                 openai_model=getattr(config_module, "OPENAI_MODEL", "gpt-4o-mini"),
@@ -103,6 +107,8 @@ class Config:
                 openai_api_key=config_dict.get("OPENAI_API_KEY"),
                 qwen_api_key=config_dict.get("QWEN_API_KEY"),
                 tavily_api_key=config_dict.get("TAVILY_API_KEY"),
+                aihehuo_api_key=config_dict.get("AIHEHUO_API_KEY"),
+                aihehuo_api_base=config_dict.get("AIHEHUO_API_BASE"),
                 default_llm_provider=config_dict.get("DEFAULT_LLM_PROVIDER", "deepseek"),
                 deepseek_model=config_dict.get("DEEPSEEK_MODEL", "deepseek-chat"),
                 openai_model=config_dict.get("OPENAI_MODEL", "gpt-4o-mini"),
@@ -172,4 +178,7 @@ def print_config(config: Config):
     print(f"OpenAI API Key: {'已设置' if config.openai_api_key else '未设置'}")
     print(f"Qwen API Key: {'已设置' if config.qwen_api_key else '未设置'}")
     print(f"Tavily API Key: {'已设置' if config.tavily_api_key else '未设置'}")
+    print(f"AIHehuo API Key: {'已设置' if config.aihehuo_api_key else '未设置'}")
+    if config.aihehuo_api_base:
+        print(f"AIHehuo API Base: {config.aihehuo_api_base}")
     print("==================\n")

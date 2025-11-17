@@ -14,6 +14,7 @@ from .ppt_generation_node import PPTGenerationNode
 from .search_node import FirstSearchNode, ReflectionNode
 from .summary_node import FirstSummaryNode, ReflectionSummaryNode
 from .formatting_node import ReportFormattingNode
+from .partner_search_node import PartnerSearchNode
 
 __all__ = [
     "BaseNode",
@@ -28,5 +29,6 @@ __all__ = [
     "ReflectionNode", 
     "FirstSummaryNode",
     "ReflectionSummaryNode",
-    "ReportFormattingNode"
+    "ReportFormattingNode",
+    "PartnerSearchNode"
 ]

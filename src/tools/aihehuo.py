@@ -55,6 +55,8 @@ class MemberResult:
     goal: Optional[str] = None
     tags: Optional[List[str]] = None
     wechat_reachable: Optional[bool] = None
+    age: Optional[int] = None
+    age_range: Optional[str] = None
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典格式"""
@@ -64,7 +66,9 @@ class MemberResult:
             "bio": self.bio,
             "goal": self.goal,
             "tags": self.tags,
-            "wechat_reachable": self.wechat_reachable
+            "wechat_reachable": self.wechat_reachable,
+            "age": self.age,
+            "age_range": self.age_range
         }
 
 
@@ -306,6 +310,24 @@ class AihehuoClient:
                             elif key == "AI印象标签":
                                 # 标签可能是逗号分隔的
                                 user_info["tags"] = [t.strip() for t in value.split(",") if t.strip()]
+                            elif key == "年龄段":
+                                # 直接使用API返回的年龄段，如"80后"、"90后"等
+                                user_info["age_range"] = value.strip()
+                            elif key == "年龄" or key == "出生日期" or key == "生日":
+                                # 提取年龄信息
+                                age = self._extract_age(value)
+                                if age:
+                                    user_info["age"] = age
+                                    # 如果已经有年龄段，就不重新计算
+                                    if not user_info.get("age_range"):
+                                        user_info["age_range"] = self._calculate_age_range(age)
+                    
+                    # 如果简介中包含年龄信息，也尝试提取（只有在没有年龄段的情况下）
+                    if not user_info.get("age_range") and not user_info.get("age") and user_info.get("bio"):
+                        age = self._extract_age_from_bio(user_info["bio"])
+                        if age:
+                            user_info["age"] = age
+                            user_info["age_range"] = self._calculate_age_range(age)
                     
                     # 如果提取到了基本信息，创建结果对象
                     if user_info.get("user_id") or user_info.get("name"):
@@ -313,7 +335,9 @@ class AihehuoClient:
                             user_id=str(user_info.get("user_id", "")),
                             name=user_info.get("name", ""),
                             bio=user_info.get("bio"),
-                            tags=user_info.get("tags")
+                            tags=user_info.get("tags"),
+                            age=user_info.get("age"),
+                            age_range=user_info.get("age_range")
                         )
                         results.append(result)
             
@@ -331,6 +355,119 @@ class AihehuoClient:
         except Exception as e:
             print(f"搜索成员错误: {str(e)}")
             return []
+    
+    def _extract_age(self, value: str) -> Optional[int]:
+        """
+        从字符串中提取年龄
+        
+        Args:
+            value: 包含年龄信息的字符串
+            
+        Returns:
+            年龄（整数），如果无法提取则返回None
+        """
+        import re
+        # 尝试提取数字年龄，如 "25岁", "年龄: 25", "age: 25" 等
+        # 优先匹配明确的年龄格式
+        patterns = [
+            (r'(\d+)岁', True),  # "25岁" - 明确格式，直接返回
+            (r'年龄[：:]?\s*(\d+)', True),  # "年龄: 25" 或 "年龄：25" - 明确格式
+            (r'age[：:]?\s*(\d+)', True),  # "age: 25" - 明确格式
+            (r'(\d{1,2})\s*岁', True),  # "25 岁" - 明确格式
+        ]
+        
+        # 先尝试明确的年龄格式
+        for pattern, strict in patterns:
+            match = re.search(pattern, value, re.IGNORECASE)
+            if match:
+                age = int(match.group(1))
+                # 年龄合理性检查：通常在18-100岁之间
+                if 18 <= age <= 100:
+                    return age
+        
+        # 如果没有找到明确的年龄格式，尝试提取可能包含年龄的数字
+        # 但需要更谨慎，避免误匹配年份或其他数字
+        # 只在值很短（可能是单独的数字）时才尝试
+        if len(value.strip()) <= 3:  # 只有很短的值才可能是单独的数字
+            match = re.search(r'^(\d{2})$', value.strip())
+            if match:
+                age = int(match.group(1))
+                # 更保守的范围，避免误匹配
+                if 20 <= age <= 65:  # 创业人群常见年龄段
+                    return age
+        
+        return None
+    
+    def _extract_age_from_bio(self, bio: str) -> Optional[int]:
+        """
+        从个人简介中提取年龄信息
+        
+        Args:
+            bio: 个人简介文本
+            
+        Returns:
+            年龄（整数），如果无法提取则返回None
+        """
+        if not bio:
+            return None
+        
+        # 先尝试直接提取年龄
+        age = self._extract_age(bio)
+        if age:
+            return age
+        
+        # 尝试提取出生年份
+        import re
+        from datetime import datetime
+        year_patterns = [
+            r'(\d{4})年.*出生',  # "1990年出生"
+            r'出生于[：:]?\s*(\d{4})',  # "出生于1990" 或 "出生于：1990"
+            r'birth[：:]?\s*(\d{4})',  # "birth: 1990"
+            r'(\d{4})年生',  # "1990年生"
+        ]
+        
+        current_year = datetime.now().year
+        for pattern in year_patterns:
+            match = re.search(pattern, bio, re.IGNORECASE)
+            if match:
+                birth_year = int(match.group(1))
+                # 出生年份合理性检查：通常在1950-2006之间（对应18-74岁）
+                # 创业人群通常在18-70岁之间
+                if 1950 <= birth_year <= current_year - 18:
+                    age = current_year - birth_year
+                    if 18 <= age <= 100:
+                        return age
+        
+        return None
+    
+    def _calculate_age_range(self, age: int) -> str:
+        """
+        根据年龄计算年龄段
+        
+        Args:
+            age: 年龄
+            
+        Returns:
+            年龄段字符串
+        """
+        if age < 25:
+            return "20-24岁"
+        elif age < 30:
+            return "25-29岁"
+        elif age < 35:
+            return "30-34岁"
+        elif age < 40:
+            return "35-39岁"
+        elif age < 45:
+            return "40-44岁"
+        elif age < 50:
+            return "45-49岁"
+        elif age < 55:
+            return "50-54岁"
+        elif age < 60:
+            return "55-59岁"
+        else:
+            return "60岁以上"
     
     def get_user_info(self, user_id: str, timeout: int = 15) -> Optional[UserInfo]:
         """
