@@ -5,6 +5,7 @@ BP Generation Agent
 
 import os
 import traceback
+import uuid
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
@@ -17,6 +18,7 @@ from .nodes import (
     Pitch60sNode,
     PPTGenerationNode,
     PartnerSearchNode,
+    InputCompletenessNode,
 )
 from .utils.config import Config, load_config
 from .utils.text_processing import detect_language
@@ -77,6 +79,7 @@ class BPGenerationAgent:
         business_idea: str,
         output_file: Optional[str] = None,
         save_report: bool = True,
+        session_dir: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         生成BP结构、评估、Pitch和PPT；最终输出Markdown
@@ -85,14 +88,123 @@ class BPGenerationAgent:
             business_idea: 商业创意
             output_file: 指定输出Markdown文件路径（可选）
             save_report: 是否保存Markdown到文件
+            session_dir: Session目录路径（可选），如果未提供则自动生成session ID和目录
 
         Returns:
-            包含输出文件路径、Markdown文本等信息的字典
+            包含输出文件路径、Markdown文本等信息的字典，包括：
+            - session_id: 会话ID（如果未提供session_dir则自动生成）
+            - session_dir: 会话目录路径（如果save_report为True）
         """
         print("\n" + "=" * 60)
         print(f"开始生成BP: {business_idea[:80]}...")
         print("=" * 60)
 
+        # 如果没有提供session_dir，自动生成session ID和目录
+        session_id = None
+        if session_dir is None:
+            session_id = str(uuid.uuid4())
+            session_dir = os.path.join(self.config.output_dir, session_id)
+            os.makedirs(session_dir, exist_ok=True)
+            print(f"自动生成Session ID: {session_id}")
+            print(f"Session目录: {session_dir}")
+        else:
+            # 如果提供了session_dir，从路径中提取session_id（如果可能）
+            session_id = os.path.basename(session_dir)
+            # 验证是否是有效的UUID格式
+            try:
+                uuid.UUID(session_id)
+            except (ValueError, AttributeError):
+                # 如果不是UUID格式，生成一个新的
+                session_id = str(uuid.uuid4())
+                print(f"从session_dir提取的ID不是有效UUID，生成新的Session ID: {session_id}")
+
+        # 首先检查输入完整性
+        input_completeness_node = InputCompletenessNode(self.llm_client)
+        completeness_result = input_completeness_node.run(business_idea, session_dir=session_dir)
+        
+        # 如果输入不完整，返回错误信息
+        if not completeness_result.get("is_complete", False):
+            current_perspective = completeness_result.get("current_perspective", "none")
+            suggestions = completeness_result.get("suggestions", [])
+            perspective_details = completeness_result.get("perspective_details", {})
+            
+            # 构建错误消息
+            perspective_names = {
+                "technical": "技术视角",
+                "user_painpoint": "用户痛点视角（需求视角）",
+                "market": "市场视角",
+                "mixed": "混合视角",
+                "none": "无法确定"
+            }
+            perspective_name = perspective_names.get(current_perspective, "未知视角")
+            
+            error_message = f"输入不完整：当前输入主要属于{perspective_name}，但描述不够完整。\n\n"
+            error_message += "各视角完整性评估：\n"
+            
+            # 使用节点返回的格式化信息
+            formatted_checklist = completeness_result.get("formatted_checklist", {})
+            
+            for perspective, details in perspective_details.items():
+                perspective_cn = {
+                    "technical": "技术视角",
+                    "user_painpoint": "用户痛点视角",
+                    "market": "市场视角"
+                }.get(perspective, perspective)
+                completeness = details.get("completeness", "missing")
+                completeness_cn = {
+                    "complete": "完整",
+                    "partial": "部分",
+                    "missing": "缺失"
+                }.get(completeness, completeness)
+                error_message += f"- {perspective_cn}: {completeness_cn}\n"
+                
+                # 使用节点格式化的信息
+                if perspective in formatted_checklist:
+                    formatted = formatted_checklist[perspective]
+                    
+                    # 显示缺失的检查点
+                    missing_checkpoints = formatted.get("missing_checkpoints", [])
+                    if missing_checkpoints:
+                        error_message += f"  缺失的检查点：\n"
+                        for checkpoint in missing_checkpoints:
+                            error_message += f"    - {checkpoint}\n"
+                    
+                    # 显示检查清单状态
+                    checklist_status = formatted.get("checklist_status", [])
+                    if checklist_status:
+                        error_message += f"  检查清单状态：\n"
+                        for item in checklist_status:
+                            error_message += f"    {item['status']} {item['name']}\n"
+            
+            if suggestions:
+                error_message += "\n改进建议：\n"
+                for i, suggestion in enumerate(suggestions, 1):
+                    error_message += f"{i}. {suggestion}\n"
+            
+            print("\n" + "=" * 60)
+            print("输入完整性检查失败")
+            print("=" * 60)
+            print(error_message)
+            
+            return {
+                "output_file": None,
+                "markdown": None,
+                "bp_structure": None,
+                "iteration_history": [],
+                "evaluation_result": None,
+                "pitch_result": None,
+                "ppt_result": None,
+                "partner_search_result": None,
+                "partner_report_file": None,
+                "ppt_design_file": None,
+                "session_id": session_id,
+                "session_dir": session_dir if save_report else None,
+                "input_completeness": completeness_result,
+                "error": error_message
+            }
+        
+        print("✓ 输入完整性检查通过")
+        
         # 初始化节点
         bp_structure_node = BPStructureNode(self.llm_client, business_idea)
         evaluation_node = BPEvaluationNode(self.llm_client)
@@ -476,7 +588,7 @@ class BPGenerationAgent:
                     print("\n警告: PPT结果存在但slides为空")
 
             if save_report:
-                output_path = output_file or self._build_default_filename(business_idea)
+                output_path = output_file or self._build_default_filename(business_idea, session_dir)
                 os.makedirs(os.path.dirname(output_path), exist_ok=True)
                 with open(output_path, "w", encoding="utf-8") as f:
                     f.write(markdown_content)
@@ -529,10 +641,20 @@ class BPGenerationAgent:
                         except Exception as e:
                             print(f"\n保存人脉报告时出错: {e}")
                             traceback.print_exc()
+                
+                # 从保存的PPT文件路径中提取ppt_design_file
+                ppt_design_file = None
+                if ppt_result and output_path:
+                    base_name = os.path.splitext(os.path.basename(output_path))[0]
+                    ppt_dir = os.path.dirname(output_path)
+                    ppt_design_file = os.path.join(ppt_dir, f"{base_name}_ppt_design.md")
+                    if not os.path.exists(ppt_design_file):
+                        ppt_design_file = None
             else:
                 print("\n[DEBUG] save_report为False，跳过文件保存")
                 output_path = None
                 partner_report_path = None
+                ppt_design_file = None
 
             return {
                 "output_file": output_path,
@@ -544,6 +666,10 @@ class BPGenerationAgent:
                 "ppt_result": ppt_result,
                 "partner_search_result": partner_search_result,
                 "partner_report_file": partner_report_path if save_report and partner_search_result else None,
+                "ppt_design_file": ppt_design_file if save_report and ppt_result else None,
+                "session_id": session_id,
+                "session_dir": session_dir if save_report else None,
+                "input_completeness": completeness_result,
             }
 
         except Exception as exc:
@@ -554,14 +680,17 @@ class BPGenerationAgent:
     # Markdown 构建 & 工具方法
     # ---------------------------------------------------------------------- #
 
-    def _build_default_filename(self, business_idea: str) -> str:
+    def _build_default_filename(self, business_idea: str, session_dir: Optional[str] = None) -> str:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_idea = "".join(
             c for c in business_idea[:30] if c.isalnum() or c in (" ", "-", "_")
         ).rstrip()
         safe_idea = safe_idea.replace(" ", "_")
+        
+        # 如果提供了session_dir，使用session_dir作为输出目录
+        output_dir = session_dir if session_dir else self.config.output_dir
         return os.path.join(
-            self.config.output_dir, f"bp_structure_{safe_idea}_{timestamp}.md"
+            output_dir, f"bp_structure_{safe_idea}_{timestamp}.md"
         )
     
     def _save_ppt_design_file(

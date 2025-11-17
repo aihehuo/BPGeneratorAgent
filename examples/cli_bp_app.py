@@ -228,9 +228,131 @@ def display_results(result: dict, agent: BPGenerationAgent):
     print("生成结果")
     print("=" * 60)
     
+    # 检查是否有错误（输入不完整等情况）
+    if result.get('error'):
+        print("\n" + "=" * 60)
+        print("生成失败")
+        print("=" * 60)
+        print(result.get('error'))
+        
+        # 显示输入完整性检查结果
+        input_completeness = result.get('input_completeness')
+        if input_completeness:
+            print("\n" + "-" * 60)
+            print("输入完整性检查结果:")
+            print("-" * 60)
+            current_perspective = input_completeness.get('current_perspective', 'none')
+            perspective_names = {
+                "technical": "技术视角",
+                "user_painpoint": "用户痛点视角（需求视角）",
+                "market": "市场视角",
+                "mixed": "混合视角",
+                "none": "无法确定"
+            }
+            print(f"当前视角: {perspective_names.get(current_perspective, current_perspective)}")
+            
+            perspective_details = input_completeness.get('perspective_details', {})
+            if perspective_details:
+                print("\n各视角完整性评估:")
+                for perspective, details in perspective_details.items():
+                    perspective_cn = {
+                        "technical": "技术视角",
+                        "user_painpoint": "用户痛点视角",
+                        "market": "市场视角"
+                    }.get(perspective, perspective)
+                    completeness = details.get('completeness', 'missing')
+                    completeness_cn = {
+                        "complete": "完整",
+                        "partial": "部分",
+                        "missing": "缺失"
+                    }.get(completeness, completeness)
+                    print(f"  - {perspective_cn}: {completeness_cn}")
+                    
+                    # 使用节点返回的格式化信息
+                    formatted_checklist = input_completeness.get('formatted_checklist', {})
+                    if perspective in formatted_checklist:
+                        formatted = formatted_checklist[perspective]
+                        
+                        # 显示缺失的检查点
+                        missing_checkpoints = formatted.get('missing_checkpoints', [])
+                        if missing_checkpoints:
+                            print(f"    缺失的检查点:")
+                            for checkpoint in missing_checkpoints:
+                                print(f"      - {checkpoint}")
+                        
+                        # 显示检查清单状态
+                        checklist_status = formatted.get('checklist_status', [])
+                        if checklist_status:
+                            print(f"    检查清单状态:")
+                            for item in checklist_status:
+                                print(f"      {item['status']} {item['name']}")
+            
+            suggestions = input_completeness.get('suggestions', [])
+            if suggestions:
+                print("\n改进建议:")
+                for i, suggestion in enumerate(suggestions, 1):
+                    print(f"  {i}. {suggestion}")
+        
+        # 显示保存的用户输入文件路径
+        input_completeness = result.get('input_completeness')
+        if input_completeness and input_completeness.get('saved_input_file'):
+            print(f"\n用户输入已保存到: {input_completeness.get('saved_input_file')}")
+        
+        # 显示Session信息（即使失败也可能有session_id）
+        session_id = result.get('session_id')
+        session_dir = result.get('session_dir')
+        if session_id:
+            print("\n" + "=" * 60)
+            print("Session 信息")
+            print("=" * 60)
+            print(f"Session ID: {session_id}")
+            if session_dir:
+                print(f"Session目录: {session_dir}")
+            
+            # 提供下次调用的示例
+            print("\n下次继续使用此Session的方法:")
+            print("-" * 60)
+            print(f"1. 使用此Session ID继续生成（修正输入后）:")
+            print(f"   python cli_bp_app.py --session-id {session_id} --idea \"修正后的商业创意\"")
+            print(f"\n2. 查看之前保存的用户输入:")
+            print(f"   python cli_bp_app.py --session-id {session_id}")
+            print(f"   (然后选择查看之前的用户输入)")
+            print("=" * 60)
+        
+        return
+    
     # 基本信息
     print(f"\n输出文件: {result.get('output_file', 'N/A')}")
-    print(f"Markdown长度: {len(result.get('markdown', ''))} 字符")
+    
+    # 明确显示Session信息
+    session_id = result.get('session_id')
+    session_dir = result.get('session_dir')
+    if session_id:
+        print("\n" + "=" * 60)
+        print("Session 信息")
+        print("=" * 60)
+        print(f"Session ID: {session_id}")
+        if session_dir:
+            print(f"Session目录: {session_dir}")
+        
+        # 提供下次调用的示例
+        print("\n下次继续使用此Session的方法:")
+        print("-" * 60)
+        print(f"1. 继续在当前Session中生成新的商业计划书:")
+        print(f"   python cli_bp_app.py --session-id {session_id} --idea \"你的新商业创意\"")
+        print(f"\n2. 查看之前保存的用户输入:")
+        print(f"   python cli_bp_app.py --session-id {session_id}")
+        print(f"   (然后选择查看之前的用户输入)")
+        print(f"\n3. 在指定Session中生成（不指定idea，将交互式输入）:")
+        print(f"   python cli_bp_app.py --session-id {session_id}")
+        print("=" * 60)
+    else:
+        print(f"\nSession ID: 未生成")
+    markdown = result.get('markdown')
+    if markdown:
+        print(f"Markdown长度: {len(markdown)} 字符")
+    else:
+        print("Markdown: 未生成")
     
     # BP结构
     bp_structure = result.get('bp_structure', [])
@@ -264,7 +386,7 @@ def display_results(result: dict, agent: BPGenerationAgent):
         print(f"✓ PPT草稿已生成（共 {len(slides)} 页）")
     
     # 预览Markdown
-    markdown = result.get('markdown', '')
+    markdown = result.get('markdown')
     if markdown:
         print("\n" + "-" * 60)
         print("Markdown预览（前500字符）:")
@@ -303,9 +425,11 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  python cli_bp_app.py                    # 交互式运行
-  python cli_bp_app.py --config config.py # 使用指定配置文件
-  python cli_bp_app.py --idea "我的商业创意" # 直接指定商业创意
+  python cli_bp_app.py                                    # 交互式运行
+  python cli_bp_app.py --config config.py                # 使用指定配置文件
+  python cli_bp_app.py --idea "我的商业创意"              # 直接指定商业创意
+  python cli_bp_app.py --session-id <session_id>         # 使用指定Session ID
+  python cli_bp_app.py --session-id <session_id> --idea "新的商业创意"  # 在指定Session中生成
         """
     )
     
@@ -331,6 +455,12 @@ def main():
         '--no-save',
         action='store_true',
         help='不保存报告到文件'
+    )
+    
+    parser.add_argument(
+        '--session-id',
+        type=str,
+        help='Session ID（可选，用于继续某个session或查看结果）'
     )
     
     args = parser.parse_args()
@@ -359,6 +489,34 @@ def main():
         print("\n正在初始化BP Generation Agent...")
         agent = BPGenerationAgent(config)
         
+        # 处理Session ID
+        session_dir = None
+        if args.session_id:
+            session_dir = os.path.join(config.output_dir, args.session_id)
+            if not os.path.exists(session_dir):
+                print(f"\n警告: Session目录不存在: {session_dir}")
+                create_new = get_input("是否创建新的Session？", default="y").lower()
+                if create_new not in ['y', 'yes', '是']:
+                    print("已取消")
+                    sys.exit(0)
+                os.makedirs(session_dir, exist_ok=True)
+                print(f"已创建新的Session目录: {session_dir}")
+            else:
+                print(f"\n使用现有Session: {args.session_id}")
+                print(f"Session目录: {session_dir}")
+                
+                # 检查是否有previous_user_inputs文件
+                previous_inputs_file = os.path.join(session_dir, "previous_user_inputs.md")
+                if os.path.exists(previous_inputs_file):
+                    view_previous = get_input("是否查看之前的用户输入？", default="n").lower()
+                    if view_previous in ['y', 'yes', '是']:
+                        print("\n" + "-" * 60)
+                        print("之前的用户输入:")
+                        print("-" * 60)
+                        with open(previous_inputs_file, "r", encoding="utf-8") as f:
+                            print(f.read())
+                        print("-" * 60)
+        
         # 获取商业创意
         if args.idea:
             business_idea = args.idea
@@ -373,6 +531,9 @@ def main():
         print(f"商业创意: {business_idea[:100]}...")
         print(f"LLM提供商: {config.default_llm_provider}")
         print(f"输出目录: {config.output_dir}")
+        if session_dir:
+            print(f"Session ID: {args.session_id}")
+            print(f"Session目录: {session_dir}")
         
         confirm = get_input("\n确认开始生成？", default="y").lower()
         if confirm not in ['y', 'yes', '是']:
@@ -386,15 +547,27 @@ def main():
         
         result = agent.generate_bp(
             business_idea=business_idea,
-            save_report=not args.no_save
+            save_report=not args.no_save,
+            session_dir=session_dir
         )
         
         # 显示结果
         display_results(result, agent)
         
-        print("\n" + "=" * 60)
-        print("完成！")
-        print("=" * 60)
+        # 再次显示Session信息（如果成功生成）
+        session_id = result.get('session_id')
+        if session_id and not result.get('error'):
+            print("\n" + "=" * 60)
+            print("完成！")
+            print("=" * 60)
+            print(f"\n所有文件已保存到Session: {session_id}")
+            print(f"\n快速命令参考:")
+            print(f"  继续使用此Session: python cli_bp_app.py --session-id {session_id}")
+            print("=" * 60)
+        else:
+            print("\n" + "=" * 60)
+            print("完成！")
+            print("=" * 60)
         
     except KeyboardInterrupt:
         print("\n\n用户中断")

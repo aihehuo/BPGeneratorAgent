@@ -15,6 +15,7 @@ from .search_node import FirstSearchNode, ReflectionNode
 from .summary_node import FirstSummaryNode, ReflectionSummaryNode
 from .formatting_node import ReportFormattingNode
 from .partner_search_node import PartnerSearchNode
+from .input_completeness_node import InputCompletenessNode
 
 __all__ = [
     "BaseNode",
@@ -30,5 +31,6 @@ __all__ = [
     "FirstSummaryNode",
     "ReflectionSummaryNode",
     "ReportFormattingNode",
-    "PartnerSearchNode"
+    "PartnerSearchNode",
+    "InputCompletenessNode"
 ]
