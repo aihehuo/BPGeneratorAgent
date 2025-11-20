@@ -1,0 +1,923 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BP Generation Agent - Web UI</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .section {
+            margin-bottom: 30px;
+        }
+
+        .section-title {
+            font-size: 1.3em;
+            font-weight: 600;
+            margin-bottom: 15px;
+            color: #333;
+            border-left: 4px solid #667eea;
+            padding-left: 10px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #555;
+        }
+
+        input, textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        input:focus, textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        textarea {
+            min-height: 120px;
+            resize: vertical;
+            font-family: inherit;
+        }
+
+        .session-controls {
+            display: flex;
+            gap: 10px;
+            align-items: flex-end;
+        }
+
+        .session-controls input {
+            flex: 1;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            white-space: nowrap;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: #f0f0f0;
+            color: #333;
+        }
+
+        .btn-secondary:hover {
+            background: #e0e0e0;
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            width: auto;
+        }
+
+        .status {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .status.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+
+        .result-section {
+            margin-top: 30px;
+        }
+
+        .result-box {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 15px;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .result-box pre {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .session-info {
+            background: #e7f3ff;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #2196F3;
+        }
+
+        .session-info strong {
+            color: #1976D2;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .loading.active {
+            display: block;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .api-url-input {
+            margin-bottom: 20px;
+        }
+
+        .api-url-input input {
+            font-family: 'Courier New', monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 BP Generation Agent</h1>
+            <p>商业计划书生成工具 - Web 界面</p>
+        </div>
+
+        <div class="content">
+            <!-- API 配置 -->
+            <div class="section">
+                <div class="section-title">API 配置</div>
+                <div class="form-group api-url-input">
+                    <label for="apiUrl">API 地址</label>
+                    <input type="text" id="apiUrl" value="http://localhost:8000" placeholder="http://localhost:8000">
+                </div>
+            </div>
+
+            <!-- Session 管理 -->
+            <div class="section">
+                <div class="section-title">Session 管理</div>
+                <div class="session-controls">
+                    <div class="form-group" style="flex: 1;">
+                        <label for="sessionId">Session ID (可选，留空则创建新 Session)</label>
+                        <input type="text" id="sessionId" placeholder="例如: 352272b0-9934-4b0b-bd9f-6035c633a084">
+                    </div>
+                    <button class="btn btn-secondary" onclick="loadHistoryToInput()">加载历史输入</button>
+                    <button class="btn btn-secondary" onclick="loadSessionFiles()">查看 Session 文件</button>
+                    <button class="btn btn-secondary" onclick="clearSession()">清除 Session</button>
+                </div>
+                <div id="sessionInfo" class="session-info" style="display: none;">
+                    <strong>当前 Session:</strong> <span id="currentSessionId"></span>
+                </div>
+            </div>
+
+            <!-- 状态提示 -->
+            <div id="status" class="status"></div>
+
+            <!-- 加载提示 -->
+            <div id="loading" class="loading">
+                <div class="spinner"></div>
+                <p>正在生成商业计划书，请稍候...</p>
+            </div>
+
+            <!-- 输入表单 -->
+            <div class="section">
+                <div class="section-title">商业创意输入</div>
+                <div class="form-group">
+                    <label for="businessIdea">商业创意描述 *</label>
+                    <textarea id="businessIdea" placeholder="请输入您的商业创意，例如：一个基于AI的在线教育平台，主要面向K12学生，提供个性化学习路径推荐"></textarea>
+                </div>
+                <div class="form-group">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="saveReport" checked>
+                        <label for="saveReport">保存报告到文件</label>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="previewMode">
+                        <label for="previewMode">预览模式（只返回前2000字符）</label>
+                    </div>
+                </div>
+                <button class="btn btn-primary" onclick="generateBP()" id="generateBtn">生成商业计划书</button>
+            </div>
+
+            <!-- Session 文件列表 -->
+            <div class="section" id="sessionFilesSection" style="display: none;">
+                <div class="section-title">Session 文件</div>
+                <div id="sessionFilesContent" class="result-box">
+                    <p>正在加载文件列表...</p>
+                </div>
+            </div>
+
+            <!-- 结果显示 -->
+            <div class="result-section" id="resultSection" style="display: none;">
+                <div class="section-title">生成结果</div>
+                <div class="result-box">
+                    <pre id="resultContent"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+
+        // 从 localStorage 加载保存的 session ID
+        function loadSession() {
+            const savedSessionId = localStorage.getItem('bp_session_id');
+            if (savedSessionId) {
+                document.getElementById('sessionId').value = savedSessionId;
+                showSessionInfo(savedSessionId);
+                // 自动加载文件列表
+                loadSessionFiles();
+            }
+        }
+
+        // 保存 session ID 到 localStorage
+        function saveSession(sessionId) {
+            if (sessionId) {
+                localStorage.setItem('bp_session_id', sessionId);
+                showSessionInfo(sessionId);
+            }
+        }
+
+        // 显示 session 信息
+        function showSessionInfo(sessionId) {
+            document.getElementById('currentSessionId').textContent = sessionId;
+            document.getElementById('sessionInfo').style.display = 'block';
+        }
+
+        // 加载历史输入到输入框
+        async function loadHistoryToInput() {
+            const sessionId = document.getElementById('sessionId').value.trim();
+            const apiUrl = document.getElementById('apiUrl').value || API_BASE;
+            const businessIdeaInput = document.getElementById('businessIdea');
+            
+            if (!sessionId) {
+                showStatus('请先输入或选择 Session ID', 'error');
+                return;
+            }
+            
+            try {
+                showStatus('正在加载历史输入...', 'info');
+                
+                // 获取历史输入文件
+                const response = await fetch(`${apiUrl}/api/v1/files/${sessionId}/previous_user_inputs.md`);
+                
+                if (response.ok) {
+                    const content = await response.text();
+                    
+                    // 提取所有历史输入
+                    const inputs = extractHistoryInputs(content);
+                    
+                    if (inputs.length > 0) {
+                        // 倒序排列（最新的在前）
+                        const reversedInputs = inputs.reverse();
+                        
+                        // 去重：如果某条输入完全包含在后续（更新的）输入中，则跳过
+                        // 从最新的开始处理，对于每条旧的输入，检查它是否完全包含在已处理的（更新的）输入中
+                        const deduplicatedInputs = [];
+                        for (let i = reversedInputs.length - 1; i >= 0; i--) {
+                            const originalInput = reversedInputs[i].trim();
+                            if (!originalInput) continue;
+                            
+                            // 规范化当前输入：去除首尾空白，并将多个连续空白替换为单个空格，用于比较
+                            const normalizedCurrent = originalInput.replace(/\s+/g, ' ').trim();
+                            if (!normalizedCurrent) continue;
+                            
+                            // 检查当前输入是否完全包含在已经处理过的（更新的）输入中
+                            let isFullyContained = false;
+                            for (let j = 0; j < deduplicatedInputs.length; j++) {
+                                // 规范化已处理的输入，用于比较
+                                const normalizedNewer = deduplicatedInputs[j].trim().replace(/\s+/g, ' ').trim();
+                                // 检查更新的输入是否包含当前输入（旧输入）
+                                // 使用规范化后的字符串进行比较
+                                if (normalizedNewer.includes(normalizedCurrent)) {
+                                    isFullyContained = true;
+                                    console.log(`去重: 跳过输入 "${normalizedCurrent.substring(0, 50)}..." (包含在 "${normalizedNewer.substring(0, 50)}..." 中)`);
+                                    break;
+                                }
+                            }
+                            
+                            // 如果没有被完全包含，则添加到结果的开头（保持最新在前的顺序）
+                            if (!isFullyContained) {
+                                deduplicatedInputs.unshift(originalInput); // 使用原始格式，保持用户输入的格式
+                            }
+                        }
+                        
+                        // 用换行连接（不需要分隔符）
+                        const combinedInput = deduplicatedInputs.join('\n\n');
+                        
+                        // 如果输入框已有内容，询问是否替换
+                        if (businessIdeaInput.value.trim()) {
+                            if (!confirm('输入框已有内容，是否用历史输入替换？\n\n点击"确定"替换，点击"取消"追加到末尾。')) {
+                                // 追加到末尾
+                                businessIdeaInput.value = businessIdeaInput.value + '\n\n' + combinedInput;
+                            } else {
+                                // 替换
+                                businessIdeaInput.value = combinedInput;
+                            }
+                        } else {
+                            // 直接填入
+                            businessIdeaInput.value = combinedInput;
+                        }
+                        
+                        const originalCount = inputs.length;
+                        const deduplicatedCount = deduplicatedInputs.length;
+                        if (originalCount === deduplicatedCount) {
+                            showStatus(`已加载 ${deduplicatedCount} 条历史输入到输入框（最新在前）`, 'success');
+                        } else {
+                            showStatus(`已加载 ${deduplicatedCount} 条历史输入到输入框（最新在前，已去重 ${originalCount - deduplicatedCount} 条）`, 'success');
+                        }
+                    } else {
+                        showStatus('该 Session 暂无历史输入记录', 'info');
+                    }
+                } else if (response.status === 404) {
+                    showStatus('该 Session 暂无历史输入记录', 'info');
+                } else {
+                    throw new Error(`加载失败: ${response.status} ${response.statusText}`);
+                }
+            } catch (error) {
+                showStatus(`加载历史输入失败: ${error.message}`, 'error');
+                console.error('Error loading history:', error);
+            }
+        }
+        
+        // 从历史输入文件中提取所有输入内容
+        function extractHistoryInputs(content) {
+            const inputs = [];
+            
+            // 检测语言
+            const isEnglish = content.includes('## Input Record') || content.includes('**Business Idea**');
+            
+            if (isEnglish) {
+                // 英文格式：## Input Record ... **Business Idea**: ... ---
+                const pattern = /## Input Record[\s\S]*?\*\*Business Idea\*\*:\s*\n\n([\s\S]*?)(?=\n\n---|\n\n##|$)/g;
+                let match;
+                while ((match = pattern.exec(content)) !== null) {
+                    const idea = match[1].trim();
+                    if (idea) {
+                        inputs.push(idea);
+                    }
+                }
+            } else {
+                // 中文格式：## 输入记录 ... **商业创意**: ... ---
+                const pattern = /## 输入记录[\s\S]*?\*\*商业创意\*\*:\s*\n\n([\s\S]*?)(?=\n\n---|\n\n##|$)/g;
+                let match;
+                while ((match = pattern.exec(content)) !== null) {
+                    const idea = match[1].trim();
+                    if (idea) {
+                        inputs.push(idea);
+                    }
+                }
+            }
+            
+            return inputs;
+        }
+        
+        // 加载并显示 Session 文件列表
+        async function loadSessionFiles() {
+            const sessionId = document.getElementById('sessionId').value.trim();
+            const apiUrl = document.getElementById('apiUrl').value || API_BASE;
+            const sessionFilesSection = document.getElementById('sessionFilesSection');
+            const sessionFilesContent = document.getElementById('sessionFilesContent');
+            
+            if (!sessionId) {
+                showStatus('请先输入 Session ID', 'error');
+                sessionFilesSection.style.display = 'none';
+                return;
+            }
+            
+            try {
+                showStatus('正在加载文件列表...', 'info');
+                sessionFilesSection.style.display = 'block';
+                sessionFilesContent.innerHTML = '<p>正在加载文件列表...</p>';
+                
+                // 获取文件列表
+                const response = await fetch(`${apiUrl}/api/v1/files/${sessionId}`);
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    
+                    if (result.success && result.files && result.files.length > 0) {
+                        // 按修改时间排序（最新的在前）
+                        const sortedFiles = result.files.sort((a, b) => {
+                            return new Date(b.modified) - new Date(a.modified);
+                        });
+                        
+                        // 识别报告文件
+                        const reportFiles = {
+                            main_report: null,
+                            ppt_design: null,
+                            partner_report: null
+                        };
+                        
+                        sortedFiles.forEach(file => {
+                            const name = file.name.toLowerCase();
+                            const path = file.path.toLowerCase();
+                            
+                            if (name.includes('ppt') || name.includes('design') || path.includes('ppt') || path.includes('design')) {
+                                if (!reportFiles.ppt_design) {
+                                    reportFiles.ppt_design = file;
+                                }
+                            } else if (name.includes('partner') || path.includes('partner')) {
+                                if (!reportFiles.partner_report) {
+                                    reportFiles.partner_report = file;
+                                }
+                            } else if (name.endsWith('.md') && !name.includes('previous') && !name.includes('state')) {
+                                if (!reportFiles.main_report) {
+                                    reportFiles.main_report = file;
+                                }
+                            }
+                        });
+                        
+                        // 构建 HTML
+                        let html = '<div style="display: flex; flex-direction: column; gap: 15px;">';
+                        
+                        // 显示最新生成的报告（如果有）
+                        const hasReports = reportFiles.main_report || reportFiles.ppt_design || reportFiles.partner_report;
+                        if (hasReports) {
+                            html += '<div style="padding: 15px; background: #f0f7ff; border-radius: 8px; border-left: 4px solid #2196F3;">';
+                            html += '<h3 style="margin-top: 0; color: #1976D2; font-size: 16px;">📁 最新生成的报告</h3>';
+                            html += '<div style="display: flex; flex-direction: column; gap: 10px;">';
+                            
+                            const reportLabels = {
+                                main_report: '📄 主报告',
+                                ppt_design: '📊 PPT 设计文档',
+                                partner_report: '👥 合伙人报告'
+                            };
+                            
+                            for (const [key, file] of Object.entries(reportFiles)) {
+                                if (file) {
+                                    const fileUrl = `${apiUrl}/api/v1/files/${sessionId}/${file.path}`;
+                                    const fileSize = (file.size / 1024).toFixed(2);
+                                    const modifiedDate = new Date(file.modified).toLocaleString('zh-CN');
+                                    
+                                    html += `<div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">`;
+                                    html += `<span style="font-weight: 500; min-width: 120px;">${reportLabels[key]}:</span>`;
+                                    html += `<a href="${fileUrl}" target="_blank" style="color: #2196F3; text-decoration: none; padding: 6px 12px; background: white; border-radius: 4px; border: 1px solid #2196F3; transition: all 0.2s; flex: 1;" onmouseover="this.style.background='#e3f2fd'; this.style.borderColor='#1976D2';" onmouseout="this.style.background='white'; this.style.borderColor='#2196F3';">`;
+                                    html += `📖 ${file.name}`;
+                                    html += `</a>`;
+                                    html += `<span style="color: #666; font-size: 12px;">${fileSize} KB · ${modifiedDate}</span>`;
+                                    html += `</div>`;
+                                }
+                            }
+                            
+                            html += '</div>';
+                            html += '</div>';
+                        }
+                        
+                        // 显示所有文件列表
+                        html += '<div style="padding: 15px; background: #f9f9f9; border-radius: 8px;">';
+                        html += '<h3 style="margin-top: 0; font-size: 16px;">📋 所有文件 (' + sortedFiles.length + ')</h3>';
+                        html += '<div style="display: flex; flex-direction: column; gap: 8px; max-height: 400px; overflow-y: auto;">';
+                        
+                        sortedFiles.forEach(file => {
+                            const fileUrl = `${apiUrl}/api/v1/files/${sessionId}/${file.path}`;
+                            const fileSize = (file.size / 1024).toFixed(2);
+                            const modifiedDate = new Date(file.modified).toLocaleString('zh-CN');
+                            const isReport = file === reportFiles.main_report || file === reportFiles.ppt_design || file === reportFiles.partner_report;
+                            
+                            html += `<div style="display: flex; align-items: center; gap: 10px; padding: 8px; background: ${isReport ? '#e3f2fd' : 'white'}; border-radius: 4px; border: 1px solid ${isReport ? '#2196F3' : '#ddd'};">`;
+                            html += `<a href="${fileUrl}" target="_blank" style="color: #2196F3; text-decoration: none; flex: 1; font-weight: ${isReport ? '500' : 'normal'};" onmouseover="this.style.textDecoration='underline';" onmouseout="this.style.textDecoration='none';">`;
+                            html += `${isReport ? '⭐ ' : ''}${file.name}`;
+                            html += `</a>`;
+                            html += `<span style="color: #666; font-size: 12px; white-space: nowrap;">${fileSize} KB</span>`;
+                            html += `<span style="color: #999; font-size: 11px; white-space: nowrap;">${modifiedDate}</span>`;
+                            html += `</div>`;
+                        });
+                        
+                        html += '</div>';
+                        html += '</div>';
+                        html += '</div>';
+                        
+                        sessionFilesContent.innerHTML = html;
+                        showStatus(`已加载 ${sortedFiles.length} 个文件`, 'success');
+                    } else {
+                        sessionFilesContent.innerHTML = '<p style="color: #666;">该 Session 暂无文件</p>';
+                        showStatus('该 Session 暂无文件', 'info');
+                    }
+                } else if (response.status === 404) {
+                    sessionFilesContent.innerHTML = '<p style="color: #666;">Session 目录不存在</p>';
+                    showStatus('Session 目录不存在', 'error');
+                } else {
+                    throw new Error(`加载失败: ${response.status} ${response.statusText}`);
+                }
+            } catch (error) {
+                sessionFilesContent.innerHTML = `<p style="color: #d32f2f;">加载失败: ${error.message}</p>`;
+                showStatus(`加载文件列表失败: ${error.message}`, 'error');
+                console.error('Error loading session files:', error);
+            }
+        }
+        
+        // 清除 session
+        async function clearSession() {
+            const sessionId = document.getElementById('sessionId').value.trim();
+            const apiUrl = document.getElementById('apiUrl').value || API_BASE;
+            
+            if (!confirm('确定要清除 Session 吗？这将清除本地存储的 Session ID，但不会删除服务器上的文件。')) {
+                return;
+            }
+            
+            // 清除本地存储
+            localStorage.removeItem('bp_session_id');
+            document.getElementById('sessionId').value = '';
+            document.getElementById('sessionInfo').style.display = 'none';
+            // 清空输入框
+            document.getElementById('businessIdea').value = '';
+            // 隐藏文件列表
+            document.getElementById('sessionFilesSection').style.display = 'none';
+            showStatus('Session 已清除，输入框已清空', 'info');
+        }
+
+        // 显示状态消息
+        function showStatus(message, type = 'info') {
+            const statusEl = document.getElementById('status');
+            statusEl.className = `status ${type}`;
+            statusEl.textContent = message;
+            statusEl.style.display = 'block';
+            
+            if (type === 'success' || type === 'info') {
+                setTimeout(() => {
+                    statusEl.style.display = 'none';
+                }, 5000);
+            }
+        }
+
+        // 生成商业计划书
+        async function generateBP() {
+            const apiUrl = document.getElementById('apiUrl').value || API_BASE;
+            const businessIdea = document.getElementById('businessIdea').value.trim();
+            const sessionId = document.getElementById('sessionId').value.trim();
+            const saveReport = document.getElementById('saveReport').checked;
+            const previewMode = document.getElementById('previewMode').checked;
+
+            if (!businessIdea) {
+                showStatus('请输入商业创意描述', 'error');
+                return;
+            }
+
+            // 显示加载状态
+            document.getElementById('loading').classList.add('active');
+            document.getElementById('generateBtn').disabled = true;
+            document.getElementById('resultSection').style.display = 'none';
+            showStatus('正在生成商业计划书...', 'info');
+
+            try {
+                const endpoint = previewMode ? '/api/v1/generate/preview' : '/api/v1/generate';
+                const requestBody = {
+                    business_idea: businessIdea,
+                    save_report: saveReport
+                };
+
+                if (sessionId) {
+                    requestBody.session_id = sessionId;
+                }
+
+                const response = await fetch(`${apiUrl}${endpoint}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestBody)
+                });
+
+                const result = await response.json();
+
+                // 隐藏加载状态
+                document.getElementById('loading').classList.remove('active');
+                document.getElementById('generateBtn').disabled = false;
+
+                // 无论成功或失败，都自动填入 session_id
+                if (result.session_id && result.session_id !== 'unknown') {
+                    saveSession(result.session_id);
+                    // 更新输入框中的 session ID
+                    document.getElementById('sessionId').value = result.session_id;
+                    // 自动加载历史输入到输入框
+                    setTimeout(() => {
+                        loadHistoryToInput();
+                    }, 500);
+                }
+
+                if (result.success) {
+                    // 显示结果
+                    displayResult(result);
+                    showStatus('商业计划书生成成功！', 'success');
+                    // 自动刷新文件列表
+                    if (result.session_id && result.session_id !== 'unknown') {
+                        setTimeout(() => {
+                            loadSessionFiles();
+                        }, 1000);
+                    }
+                } else {
+                    showStatus(`生成失败: ${result.error || result.message}`, 'error');
+                    displayResult(result);
+                }
+            } catch (error) {
+                document.getElementById('loading').classList.remove('active');
+                document.getElementById('generateBtn').disabled = false;
+                
+                let errorMsg = `请求失败: ${error.message}`;
+                
+                // 提供更详细的错误信息
+                if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+                    errorMsg = `无法连接到 API 服务器。请检查：\n1. API 服务器是否运行在 ${apiUrl}\n2. 是否启动了 API 服务器 (python api_server.py)\n3. 网络连接是否正常`;
+                } else if (error.message.includes('CORS')) {
+                    errorMsg = `CORS 错误：请确保 API 服务器支持跨域请求，或使用 HTTP 服务器访问此页面（不要直接打开文件）`;
+                }
+                
+                showStatus(errorMsg, 'error');
+                console.error('Error details:', error);
+                
+                // 显示错误详情
+                displayError(error);
+            }
+        }
+
+        // 显示错误
+        function displayError(error) {
+            const resultSection = document.getElementById('resultSection');
+            const resultContent = document.getElementById('resultContent');
+
+            let output = '=== 错误信息 ===\n\n';
+            output += `错误类型: ${error.name}\n`;
+            output += `错误消息: ${error.message}\n\n`;
+            
+            if (error.stack) {
+                output += '=== 错误堆栈 ===\n';
+                output += error.stack;
+            }
+
+            resultContent.innerHTML = '<div style="font-family: monospace; white-space: pre-wrap; word-wrap: break-word;">' + escapeHtml(output) + '</div>';
+            resultSection.style.display = 'block';
+        }
+
+        // 显示结果
+        function displayResult(result) {
+            const resultSection = document.getElementById('resultSection');
+            const resultContent = document.getElementById('resultContent');
+            
+            const apiUrl = document.getElementById('apiUrl').value || API_BASE;
+            // 优先从 result.session_id 获取，如果没有则从 result.data 中获取
+            const sessionId = result.session_id || (result.data && result.data.session_id) || 'unknown';
+            
+            // 调试日志
+            console.log('Display result:', {
+                success: result.success,
+                session_id: sessionId,
+                has_data: !!result.data,
+                has_files: !!(result.data && result.data.files),
+                files: result.data && result.data.files
+            });
+
+            let output = '=== 生成结果 ===\n\n';
+            output += `成功: ${result.success}\n`;
+            output += `消息: ${result.message}\n`;
+            output += `Session ID: ${sessionId}\n\n`;
+
+            if (result.data) {
+                output += '=== 数据 ===\n';
+                if (result.data.session_dir) {
+                    output += `Session 目录: ${result.data.session_dir}\n`;
+                }
+                if (result.data.output_file) {
+                    output += `输出文件: ${result.data.output_file}\n`;
+                }
+                if (result.data.files) {
+                    output += '\n生成的文件:\n';
+                    for (const [key, value] of Object.entries(result.data.files)) {
+                        if (value) {
+                            output += `  ${key}: ${value}\n`;
+                        }
+                    }
+                }
+                if (result.data.preview) {
+                    output += '\n=== 预览内容 ===\n';
+                    output += result.data.preview;
+                    if (result.data.is_truncated) {
+                        output += '\n\n... (内容已截断，完整长度: ' + result.data.full_length + ' 字符)';
+                    }
+                }
+                if (result.data.markdown_length) {
+                    output += `\n\nMarkdown 长度: ${result.data.markdown_length} 字符\n`;
+                }
+            }
+
+            if (result.error) {
+                output += '\n=== 错误信息 ===\n';
+                output += result.error;
+            }
+
+            // 使用 HTML 格式显示，以便添加链接
+            let htmlOutput = '<div style="font-family: monospace; white-space: pre-wrap; word-wrap: break-word;">';
+            htmlOutput += escapeHtml(output);
+            htmlOutput += '</div>';
+            
+            // 添加文件链接部分 - 只要有 sessionId 且不是 'unknown'，就尝试显示文件链接
+            if (sessionId && sessionId !== 'unknown' && result.data) {
+                const files = result.data.files || {};
+                const hasFiles = Object.values(files).some(filePath => filePath);
+                
+                if (hasFiles) {
+                    htmlOutput += '<div style="margin-top: 20px; padding: 15px; background: #f0f7ff; border-radius: 8px; border-left: 4px solid #2196F3;">';
+                    htmlOutput += '<h3 style="margin-top: 0; color: #1976D2;">📁 生成的文件</h3>';
+                    htmlOutput += '<div style="display: flex; flex-direction: column; gap: 10px;">';
+                    
+                    const keyNames = {
+                        'main_report': '📄 主报告',
+                        'ppt_design': '📊 PPT 设计文档',
+                        'partner_report': '👥 合伙人报告'
+                    };
+                    
+                    for (const [key, filePath] of Object.entries(files)) {
+                        if (filePath) {
+                            const fileName = filePath.split('/').pop() || filePath.split('\\').pop();
+                            
+                            // 提取相对路径：从 session_dir 开始的路径
+                            // 文件路径格式可能是：reports/session_id/filename.md
+                            // 或者：/absolute/path/reports/session_id/filename.md
+                            let relPath = fileName; // 默认使用文件名
+                            if (filePath.includes(sessionId)) {
+                                // 找到 session_id 之后的部分
+                                const sessionIndex = filePath.indexOf(sessionId);
+                                if (sessionIndex !== -1) {
+                                    relPath = filePath.substring(sessionIndex + sessionId.length + 1);
+                                }
+                            }
+                            
+                            const fileUrl = `${apiUrl}/api/v1/files/${sessionId}/${relPath}`;
+                            
+                            htmlOutput += `<div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">`;
+                            htmlOutput += `<span style="font-weight: 500; min-width: 120px;">${keyNames[key] || key}:</span>`;
+                            htmlOutput += `<a href="${fileUrl}" target="_blank" style="color: #2196F3; text-decoration: none; padding: 6px 12px; background: white; border-radius: 4px; border: 1px solid #2196F3; transition: all 0.2s;" onmouseover="this.style.background='#e3f2fd'; this.style.borderColor='#1976D2';" onmouseout="this.style.background='white'; this.style.borderColor='#2196F3';">`;
+                            htmlOutput += `📖 查看 ${fileName}`;
+                            htmlOutput += `</a>`;
+                            htmlOutput += `</div>`;
+                        }
+                    }
+                    
+                    htmlOutput += '</div>';
+                    htmlOutput += '</div>';
+                } else if (result.success && result.data.session_dir) {
+                    // 即使没有 files 对象，如果有 session_dir，也显示一个提示
+                    htmlOutput += '<div style="margin-top: 20px; padding: 15px; background: #fff3cd; border-radius: 8px; border-left: 4px solid #ffc107;">';
+                    htmlOutput += '<p style="margin: 0; color: #856404;">ℹ️ 文件已保存到 Session 目录，但文件列表未返回。Session ID: ' + sessionId + '</p>';
+                    htmlOutput += '</div>';
+                }
+            }
+
+            resultContent.innerHTML = htmlOutput;
+            resultSection.style.display = 'block';
+        }
+        
+        // HTML 转义函数
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // 页面加载时恢复 session
+        window.addEventListener('DOMContentLoaded', () => {
+            loadSession();
+            // 如果已有 session ID，自动加载历史输入到输入框
+            const savedSessionId = localStorage.getItem('bp_session_id');
+            if (savedSessionId) {
+                setTimeout(() => {
+                    loadHistoryToInput();
+                }, 500);
+            }
+            
+            // 监听 session ID 输入框变化，自动加载历史输入和文件列表
+            const sessionIdInput = document.getElementById('sessionId');
+            let loadTimeout;
+            sessionIdInput.addEventListener('input', () => {
+                clearTimeout(loadTimeout);
+                loadTimeout = setTimeout(() => {
+                    const sessionId = sessionIdInput.value.trim();
+                    if (sessionId && sessionId !== 'unknown') {
+                        // 加载历史输入
+                        loadHistoryToInput();
+                        // 加载文件列表
+                        loadSessionFiles();
+                    } else {
+                        // 如果清空了 session ID，清空输入框和隐藏文件列表
+                        document.getElementById('businessIdea').value = '';
+                        document.getElementById('sessionFilesSection').style.display = 'none';
+                    }
+                }, 1000); // 延迟1秒后加载，避免频繁请求
+            });
+        });
+
+        // 支持 Enter 键提交（Ctrl+Enter）
+        document.getElementById('businessIdea').addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.key === 'Enter') {
+                generateBP();
+            }
+        });
+    </script>
+</body>
+</html>
+
