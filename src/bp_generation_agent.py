@@ -1,6 +1,6 @@
 """
 BP Generation Agent
-按照 test_bp_structure 的流程生成 BP 结构、评估、Pitch、PPT，并输出 Markdown
+使用 LangGraph 工作流生成 BP 结构、评估、Pitch、PPT，并输出 Markdown
 """
 
 import os
@@ -9,17 +9,10 @@ import uuid
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
-from .llms import DeepSeekLLM, OpenAILLM, QwenLLM, BaseLLM
-from .nodes import (
-    BPStructureNode,
-    BPEvaluationNode,
-    PainpointEnhancementNode,
-    InvestorEvaluationNode,
-    Pitch60sNode,
-    PPTGenerationNode,
-    PartnerSearchNode,
-    InputCompletenessNode,
-)
+from langchain_openai import ChatOpenAI
+
+from .graph.workflow import create_bp_graph
+from .graph.chat_history import ChatHistoryManager
 from .utils.config import Config, load_config
 from .utils.text_processing import detect_language
 
@@ -29,17 +22,19 @@ class BPGenerationAgent:
 
     def __init__(self, config: Optional[Config] = None):
         """
-        初始化BP Generation Agent
+        初始化BP Generation Agent (基于 LangGraph 工作流)
 
         Args:
             config: 配置对象，如果不提供则自动加载
         """
         self.config = config or load_config()
-        self.llm_client = self._initialize_llm()
         self.max_iterations = 3
 
         os.makedirs(self.config.output_dir, exist_ok=True)
 
+        # 初始化 LangChain Chat Model
+        self.llm = self._get_llm()
+        
         # 检查爱合伙API密钥是否可用
         self.aihehuo_available = bool(self.config.aihehuo_api_key)
         if self.aihehuo_available:
@@ -47,28 +42,50 @@ class BPGenerationAgent:
         else:
             print("⚠ 爱合伙API密钥未配置，将跳过合伙人搜索功能")
 
-        print("BP Generation Agent 已初始化")
-        print(f"使用LLM: {self.llm_client.get_model_info()}")
+        print("BP Generation Agent 已初始化 (使用 LangGraph 工作流)")
+        print(f"使用LLM提供商: {self.config.default_llm_provider}")
         print(f"输出目录: {self.config.output_dir}")
 
-    def _initialize_llm(self) -> BaseLLM:
-        """初始化LLM客户端"""
+    def _get_session_dir(self, session_id: str) -> str:
+        """
+        将session_id转换为session目录路径（文件系统实现）
+        
+        Args:
+            session_id: Session ID
+            
+        Returns:
+            Session目录路径
+            
+        Note:
+            这个方法可以在未来被替换为Redis或其他存储后端的实现
+        """
+        return os.path.join(self.config.output_dir, session_id)
+
+    def _get_llm(self):
+        """Initialize LangChain Chat Model based on config."""
         if self.config.default_llm_provider == "deepseek":
-            return DeepSeekLLM(
+            return ChatOpenAI(
                 api_key=self.config.deepseek_api_key,
-                model_name=self.config.deepseek_model,
+                base_url="https://api.deepseek.com",
+                model=self.config.deepseek_model,
+                temperature=0.7
             )
-        if self.config.default_llm_provider == "openai":
-            return OpenAILLM(
+        elif self.config.default_llm_provider == "openai":
+            return ChatOpenAI(
                 api_key=self.config.openai_api_key,
-                model_name=self.config.openai_model,
+                model=self.config.openai_model,
+                temperature=0.7
             )
-        if self.config.default_llm_provider == "qwen":
-            return QwenLLM(
+        elif self.config.default_llm_provider == "qwen":
+            # Qwen compatible with OpenAI format
+            return ChatOpenAI(
                 api_key=self.config.qwen_api_key,
-                model_name=self.config.qwen_model,
+                base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+                model=self.config.qwen_model,
+                temperature=0.7
             )
-        raise ValueError(f"不支持的LLM提供商: {self.config.default_llm_provider}")
+        else:
+            raise ValueError(f"不支持的LLM提供商: {self.config.default_llm_provider}")
 
     # --------------------------------------------------------------------- #
     # 核心流程
@@ -79,56 +96,95 @@ class BPGenerationAgent:
         business_idea: str,
         output_file: Optional[str] = None,
         save_report: bool = True,
-        session_dir: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        生成BP结构、评估、Pitch和PPT；最终输出Markdown
+        生成BP结构、评估、Pitch和PPT；最终输出Markdown (基于 LangGraph 工作流)
 
         Args:
             business_idea: 商业创意
             output_file: 指定输出Markdown文件路径（可选）
             save_report: 是否保存Markdown到文件
-            session_dir: Session目录路径（可选），如果未提供则自动生成session ID和目录
+            session_id: Session ID（可选），如果未提供则自动生成
 
         Returns:
             包含输出文件路径、Markdown文本等信息的字典，包括：
-            - session_id: 会话ID（如果未提供session_dir则自动生成）
-            - session_dir: 会话目录路径（如果save_report为True）
+            - session_id: 会话ID
+            - session_dir: 会话目录路径（如果save_report为True，文件系统实现时使用）
         """
         print("\n" + "=" * 60)
         print(f"开始生成BP: {business_idea[:80]}...")
         print("=" * 60)
 
-        # 如果没有提供session_dir，自动生成session ID和目录
-        session_id = None
-        if session_dir is None:
+        # 如果没有提供session_id，自动生成
+        if session_id is None:
             session_id = str(uuid.uuid4())
-            session_dir = os.path.join(self.config.output_dir, session_id)
-            os.makedirs(session_dir, exist_ok=True)
             print(f"自动生成Session ID: {session_id}")
-            print(f"Session目录: {session_dir}")
         else:
-            # 如果提供了session_dir，从路径中提取session_id（如果可能）
-            session_id = os.path.basename(session_dir)
             # 验证是否是有效的UUID格式
             try:
                 uuid.UUID(session_id)
             except (ValueError, AttributeError):
-                # 如果不是UUID格式，生成一个新的
+                print(f"警告: 提供的session_id不是有效UUID格式，将生成新的Session ID")
                 session_id = str(uuid.uuid4())
-                print(f"从session_dir提取的ID不是有效UUID，生成新的Session ID: {session_id}")
-
-        # 首先检查输入完整性
-        input_completeness_node = InputCompletenessNode(self.llm_client)
-        completeness_result = input_completeness_node.run(business_idea, session_dir=session_dir)
+                print(f"新生成的Session ID: {session_id}")
         
-        # 如果输入不完整，返回错误信息
-        if not completeness_result.get("is_complete", False):
-            current_perspective = completeness_result.get("current_perspective", "none")
-            suggestions = completeness_result.get("suggestions", [])
-            perspective_details = completeness_result.get("perspective_details", {})
+        # Convert session_id to session_dir (filesystem-based implementation)
+        session_dir = self._get_session_dir(session_id) if save_report else None
+        if session_dir:
+            os.makedirs(session_dir, exist_ok=True)
+            print(f"Session目录: {session_dir}")
+
+        # Initialize workflow-level chat history manager
+        chat_history_manager = ChatHistoryManager(session_id=session_id)
+        
+        # Create Graph with chat history manager
+        print("Initializing Graph with chat history manager...")
+        graph = create_bp_graph(
+            self.llm,
+            self.config.aihehuo_api_key,
+            self.config.aihehuo_api_base,
+            chat_history_manager=chat_history_manager
+        )
+        
+        # Initial State
+        inputs = {
+            "business_idea": business_idea,
+            "session_id": session_id,
+            "iteration_count": 0,
+            "max_iterations": self.max_iterations,
+            "iteration_history": [],
+            "is_english": detect_language(business_idea) == 'en'
+        }
+        
+        # Run Graph
+        print("\n" + "=" * 60)
+        print(f"Starting BP Generation for: {business_idea[:50]}...")
+        print("=" * 60)
+        
+        try:
+            final_state = graph.invoke(inputs)
+        except Exception as exc:
+            print(f"\n错误: 生成BP失败: {exc}")
+            traceback.print_exc()
+            raise
+        
+        # Determine where workflow stopped
+        stop_node = None
+        completeness = final_state.get("input_completeness", {})
+        if completeness and not completeness.get("is_complete", False):
+            stop_node = "input_check"
+            print("\n输入完整性检查失败:")
+            print(f"视角: {completeness.get('current_perspective')}")
+            print("建议:")
+            for s in completeness.get("suggestions", []):
+                print(f"- {s}")
             
-            # 构建错误消息
+            # Build error message
+            current_perspective = completeness.get("current_perspective", "none")
+            suggestions = completeness.get("suggestions", [])
+            perspective_details = completeness.get("perspective_details", {})
+            
             perspective_names = {
                 "technical": "技术视角",
                 "user_painpoint": "用户痛点视角（需求视角）",
@@ -141,9 +197,7 @@ class BPGenerationAgent:
             error_message = f"输入不完整：当前输入主要属于{perspective_name}，但描述不够完整。\n\n"
             error_message += "各视角完整性评估：\n"
             
-            # 使用节点返回的格式化信息
-            formatted_checklist = completeness_result.get("formatted_checklist", {})
-            
+            formatted_checklist = completeness.get("formatted_checklist", {})
             for perspective, details in perspective_details.items():
                 perspective_cn = {
                     "technical": "技术视角",
@@ -158,33 +212,18 @@ class BPGenerationAgent:
                 }.get(completeness, completeness)
                 error_message += f"- {perspective_cn}: {completeness_cn}\n"
                 
-                # 使用节点格式化的信息
                 if perspective in formatted_checklist:
                     formatted = formatted_checklist[perspective]
-                    
-                    # 显示缺失的检查点
                     missing_checkpoints = formatted.get("missing_checkpoints", [])
                     if missing_checkpoints:
                         error_message += f"  缺失的检查点：\n"
                         for checkpoint in missing_checkpoints:
                             error_message += f"    - {checkpoint}\n"
-                    
-                    # 显示检查清单状态
-                    checklist_status = formatted.get("checklist_status", [])
-                    if checklist_status:
-                        error_message += f"  检查清单状态：\n"
-                        for item in checklist_status:
-                            error_message += f"    {item['status']} {item['name']}\n"
             
             if suggestions:
                 error_message += "\n改进建议：\n"
                 for i, suggestion in enumerate(suggestions, 1):
                     error_message += f"{i}. {suggestion}\n"
-            
-            print("\n" + "=" * 60)
-            print("输入完整性检查失败")
-            print("=" * 60)
-            print(error_message)
             
             return {
                 "output_file": None,
@@ -199,496 +238,128 @@ class BPGenerationAgent:
                 "ppt_design_file": None,
                 "session_id": session_id,
                 "session_dir": session_dir if save_report else None,
-                "input_completeness": completeness_result,
+                "input_completeness": completeness,
                 "error": error_message
             }
-        
-        print("✓ 输入完整性检查通过")
-        
-        # 初始化节点
-        bp_structure_node = BPStructureNode(self.llm_client, business_idea)
-        evaluation_node = BPEvaluationNode(self.llm_client)
-        painpoint_enhancement_node = PainpointEnhancementNode(self.llm_client)
-        investor_eval_node = InvestorEvaluationNode(self.llm_client)
-        pitch_node = Pitch60sNode(self.llm_client)
-        ppt_node = PPTGenerationNode(self.llm_client)
-        
-        # 初始化合伙人搜索节点（需要爱合伙API密钥）
-        partner_search_node = None
-        if self.aihehuo_available:
-            try:
-                partner_search_node = PartnerSearchNode(
-                    llm_client=self.llm_client,
-                    api_key=self.config.aihehuo_api_key,
-                    api_base=self.config.aihehuo_api_base
-                )
-                print("✓ 合伙人搜索节点已初始化")
-            except Exception as e:
-                print(f"警告: 初始化合伙人搜索节点失败: {e}，将跳过合伙人搜索")
-                self.aihehuo_available = False
         else:
-            print("提示: 未配置爱合伙API密钥，将跳过合伙人搜索")
-
-        bp_structure: Optional[List[Dict[str, str]]] = None
-        evaluation_result: Optional[Dict[str, Any]] = None
-        iteration_history: List[Dict[str, Any]] = []
-        pitch_result: Optional[Dict[str, Any]] = None
-        ppt_result: Optional[Dict[str, Any]] = None
-        partner_search_result: Optional[Dict[str, Any]] = None
-
-        try:
-            for iteration in range(self.max_iterations):
-                iteration_num = iteration + 1
-                print("\n" + "=" * 60)
-                print(f"迭代 {iteration_num}/{self.max_iterations}")
-                print("=" * 60)
-
-                try:
-                    if iteration == 0:
-                        print("正在生成BP结构...")
-                        bp_structure = bp_structure_node.run()
-                    else:
-                        print("正在根据反馈重新生成BP结构...")
-                        bp_structure = bp_structure_node.regenerate(
-                            evaluation_result=evaluation_result.get("evaluation_result", ""),
-                            suggestions=evaluation_result.get("suggestions", ""),
-                            current_structure=bp_structure,
-                        )
-                except Exception as exc:
-                    print("\n" + "=" * 60)
-                    print("错误: 生成BP结构失败")
-                    print("=" * 60)
-                    print(f"错误信息: {exc}")
-                    raise
-
-                print(f"\n成功生成 {len(bp_structure)} 个段落:")
-                for idx, section in enumerate(bp_structure, 1):
-                    print(f"  {idx}. {section.get('title', 'N/A')}")
-
-                # 评估BP结构
-                print("\n正在评估BP结构...")
-                evaluation_result = evaluation_node.evaluate_paragraphs(
-                    business_idea, bp_structure
-                )
-
-                iteration_history.append(
-                    {
-                        "iteration": iteration_num,
-                        "structure": bp_structure.copy(),
-                        "evaluation": evaluation_result.copy(),
-                    }
-                )
-
-                if evaluation_result.get("passed"):
-                    print("✓ BP结构评估通过")
-                    print(f"  评估结果: {evaluation_result.get('evaluation_result', 'N/A')}")
-
-                    # ------------------------------------------------------------------
-                    # 痛点加强
-                    # ------------------------------------------------------------------
-                    print("\n" + "=" * 60)
-                    print("BP评估通过，开始痛点加强")
-                    print("=" * 60)
-
-                    try:
-                        painpoint_para_index = None
-                        painpoint_para = None
-
-                        for idx, para in enumerate(bp_structure):
-                            title = para.get("title", "").strip()
-                            if (
-                                ("用户画像" in title and "痛点" in title)
-                                or ("User Persona" in title and "Pain Point" in title)
-                            ):
-                                painpoint_para_index = idx
-                                painpoint_para = para
-                                break
-
-                        if painpoint_para:
-                            print(f"找到痛点段落: {painpoint_para.get('title', 'N/A')}")
-                            enhancement_result = painpoint_enhancement_node.enhance(
-                                business_idea, painpoint_para
-                            )
-
-                            enhanced_content = enhancement_result.get(
-                                "enhanced_content", ""
-                            )
-                            selected_dimensions = enhancement_result.get(
-                                "selected_dimensions", []
-                            )
-                            dimension_descriptions = enhancement_result.get(
-                                "dimension_descriptions", []
-                            )
-                            enhancement_explanation = enhancement_result.get(
-                                "enhancement_explanation", ""
-                            )
-
-                            print("✓ 痛点加强完成")
-                            if selected_dimensions:
-                                print(f"  选择的维度: {', '.join(selected_dimensions)}")
-
-                            bp_structure[painpoint_para_index] = {
-                                "title": painpoint_para.get("title", "用户画像与痛点"),
-                                "content": enhanced_content,
-                            }
-
-                            iteration_history.append(
-                                {
-                                    "iteration": "painpoint_enhancement",
-                                    "paragraph_index": painpoint_para_index,
-                                    "paragraph_title": painpoint_para.get(
-                                        "title", "用户画像与痛点"
-                                    ),
-                                    "content_before": painpoint_para.get("content", ""),
-                                    "content_after": enhanced_content,
-                                    "selected_dimensions": selected_dimensions,
-                                    "dimension_descriptions": dimension_descriptions,
-                                    "enhancement_explanation": enhancement_explanation,
-                                }
-                            )
-                        else:
-                            print("未找到 '用户画像与痛点' 段落，跳过痛点加强")
-                    except Exception as exc:
-                        print(f"痛点加强失败: {exc}")
-
-                    # ------------------------------------------------------------------
-                    # 投资者评估
-                    # ------------------------------------------------------------------
-                    print("\n" + "=" * 60)
-                    print("痛点加强完成，开始投资者评估")
-                    print("=" * 60)
-
-                    try:
-                        bp_structure_before = [para.copy() for para in bp_structure]
-                        investor_evaluation = investor_eval_node.evaluate_full_bp(
-                            business_idea, bp_structure
-                        )
-
-                        print("\n投资者整体评估:")
-                        overall_assessment = investor_evaluation.get(
-                            "overall_assessment", ""
-                        )
-                        print(f"  整体评估: {overall_assessment[:200]}...")
-
-                        paragraph_feedbacks = investor_evaluation.get(
-                            "paragraph_specific_feedback", []
-                        )
-                        print(
-                            f"\n投资者评估完成，共 {len(paragraph_feedbacks)} 个段落反馈"
-                        )
-
-                        final_bp_structure: List[Dict[str, str]] = []
-                        for idx, para in enumerate(bp_structure):
-                            para_title = para.get("title", f"段落 {idx + 1}")
-                            print(f"  处理段落 {idx + 1}: {para_title}")
-
-                            para_feedback = next(
-                                (
-                                    fb
-                                    for fb in paragraph_feedbacks
-                                    if fb.get("paragraph_index") == idx
-                                ),
-                                None,
-                            )
-
-                            if para_feedback:
-                                feedback_text = para_feedback.get("feedback", "")
-                                suggestions_text = para_feedback.get("suggestions", "")
-                                try:
-                                    regenerated = bp_structure_node.regenerate(
-                                        evaluation_result=(
-                                            f"段落 {idx + 1} ({para_title}) 的评估反馈: "
-                                            f"{feedback_text}。注意：必须保持标题 '{para_title}' 不变，只修改内容。"
-                                        ),
-                                        suggestions=(
-                                            f"针对段落 '{para_title}' 的改进建议: "
-                                            f"{suggestions_text}。重要：必须保持标题不变。"
-                                        ),
-                                        current_structure=[para],
-                                    )
-                                    if regenerated:
-                                        regenerated_item = regenerated[0]
-                                        if regenerated_item.get("title") != para_title:
-                                            print(
-                                                "    警告: 重新生成的段落标题不匹配，已修正为原标题"
-                                            )
-                                            regenerated_item["title"] = para_title
-                                        final_bp_structure.append(regenerated_item)
-                                    else:
-                                        final_bp_structure.append(para)
-                                except Exception as exc:
-                                    print(
-                                        f"    警告: 重新生成段落 {idx + 1} 失败，使用原段落: {exc}"
-                                    )
-                                    final_bp_structure.append(para)
-                            else:
-                                final_bp_structure.append(para)
-
-                        print(f"✓ 最终BP结构生成完成，共 {len(final_bp_structure)} 个段落")
-                        bp_structure = final_bp_structure
-
-                        iteration_history.append(
-                            {
-                                "iteration": "investor_evaluation",
-                                "structure_before": bp_structure_before,
-                                "structure_after": bp_structure.copy(),
-                                "investor_evaluation": investor_evaluation,
-                            }
-                        )
-
-                        # ------------------------------------------------------------------
-                        # 生成60秒Pitch
-                        # ------------------------------------------------------------------
-                        print("\n" + "=" * 60)
-                        print("投资者评估完成，开始生成黄金60秒Pitch")
-                        print("=" * 60)
-                        try:
-                            pitch_result = pitch_node.generate_pitch(
-                                business_idea, bp_structure
-                            )
-                            iteration_history.append(
-                                {"iteration": "60s_pitch", "pitch_result": pitch_result}
-                            )
-                            painpoint_dims = pitch_result.get(
-                                "painpoint_resonance", {}
-                            ).get("selected_dimensions", [])
-                            team_advs = pitch_result.get("team_advantages", {}).get(
-                                "selected_advantages", []
-                            )
-                            if painpoint_dims:
-                                print(f"  痛点维度: {', '.join(painpoint_dims)}")
-                            if team_advs:
-                                print(f"  团队优势: {', '.join(team_advs)}")
-                        except Exception as exc:
-                            print(f"生成黄金60秒Pitch失败: {exc}")
-
-                        # ------------------------------------------------------------------
-                        # 生成10页PPT草稿
-                        # ------------------------------------------------------------------
-                        print("\n" + "=" * 60)
-                        print("开始生成10页PPT草稿")
-                        print("=" * 60)
-                        try:
-                            ppt_result = ppt_node.generate_ppt(
-                                business_idea, bp_structure
-                            )
-                            iteration_history.append(
-                                {"iteration": "ppt_generation", "ppt_result": ppt_result}
-                            )
-                            slides = ppt_result.get("slides", [])
-                            print(f"✓ PPT草稿生成成功，共 {len(slides)} 页")
-                        except Exception as exc:
-                            print(f"生成PPT草稿失败: {exc}")
-
-                        # ------------------------------------------------------------------
-                        # 搜索合伙人和投资人
-                        # ------------------------------------------------------------------
-                        if partner_search_node:
-                            print("\n" + "=" * 60)
-                            print("开始搜索合伙人和投资人")
-                            print("=" * 60)
-                            try:
-                                partner_search_result = partner_search_node.run(
-                                    input_data={
-                                        "business_idea": business_idea,
-                                        "bp_structure": bp_structure
-                                    },
-                                    partner_per_page=10,
-                                    investor_per_page=10,
-                                    wechat_reachable_only=True
-                                )
-                                iteration_history.append(
-                                    {"iteration": "partner_search", "partner_search_result": partner_search_result}
-                                )
-                                partner_count = partner_search_result.get("partner_count", 0)
-                                investor_count = partner_search_result.get("investor_count", 0)
-                                partner_query = partner_search_result.get("partner_search_query", "")
-                                investor_query = partner_search_result.get("investor_search_query", "")
-                                print(f"✓ 合伙人搜索完成，找到 {partner_count} 个合伙人，{investor_count} 个投资人")
-                                if partner_query:
-                                    print(f"  合伙人搜索查询: {partner_query}")
-                                if investor_query:
-                                    print(f"  投资人搜索查询: {investor_query}")
-                                if partner_count == 0 and investor_count == 0:
-                                    print("  警告: 未找到任何合伙人或投资人")
-                            except Exception as exc:
-                                print(f"搜索合伙人和投资人失败: {exc}")
-                                traceback.print_exc()
-                                partner_search_result = None
-
-                    except Exception as exc:
-                        print(f"投资者评估或重新生成失败: {exc}")
-                        print("将使用BP评估通过的结构作为最终结构")
-                        break
-
-                    break  # 评估通过退出主循环
-                else:
-                    print("✗ BP结构评估不通过")
-                    failed_index = evaluation_result.get("failed_paragraph_index", -1)
-                    failed_title = evaluation_result.get("failed_paragraph_title", "未知")
-                    print(f"  失败段落索引: {failed_index}")
-                    print(f"  失败段落标题: {failed_title}")
-                    print(f"  评估结果: {evaluation_result.get('evaluation_result', 'N/A')}")
-                    if iteration_num == self.max_iterations:
-                        print("已达到最大迭代次数，停止循环")
-
-            # ----------------------------------------------------------------------
-            # 构建Markdown并输出
-            # ----------------------------------------------------------------------
-            # 从iteration_history中提取partner_search_result（如果存在）
-            if not partner_search_result:
-                for hist in iteration_history:
-                    if hist.get("iteration") == "partner_search":
-                        partner_search_result = hist.get("partner_search_result")
-                        if partner_search_result:
-                            break
+            # Determine the last completed node based on state
+            if final_state.get("partner_search_result"):
+                stop_node = "partner_search"
+            elif final_state.get("ppt_result"):
+                stop_node = "ppt_gen"
+            elif final_state.get("pitch_result"):
+                stop_node = "pitch_gen"
+            elif final_state.get("investor_evaluation_result") or final_state.get("bp_structure"):
+                stop_node = "investor_eval"
+            elif final_state.get("painpoint_enhancement_result"):
+                stop_node = "painpoint_enhancement"
+            elif final_state.get("evaluation_result"):
+                stop_node = "structure_eval"
+            elif final_state.get("bp_structure"):
+                stop_node = "structure_gen"
+            else:
+                stop_node = "end"
             
-            # 调试信息：检查partner_search_result
+            print("\nGraph execution completed.")
+        
+        # Persist final workflow state to chat history
+        if chat_history_manager:
+            chat_history_manager.persist_workflow_state(final_state, stop_node=stop_node)
+        
+        # Extract results from final state
+        bp_structure = final_state.get("bp_structure", [])
+        iteration_history = final_state.get("iteration_history", [])
+        evaluation_result = final_state.get("evaluation_result", {})
+        pitch_result = final_state.get("pitch_result")
+        ppt_result = final_state.get("ppt_result")
+        partner_search_result = final_state.get("partner_search_result")
+        
+        # Build Markdown
+        markdown_content = self._build_markdown(
+            business_idea,
+            bp_structure,
+            iteration_history,
+            evaluation_result,
+            partner_search_result
+        )
+        
+        # Save files if needed
+        output_path = None
+        partner_report_path = None
+        ppt_design_file = None
+        
+        if save_report:
+            output_path = output_file or self._build_default_filename(business_idea, session_id=session_id)
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            with open(output_path, "w", encoding="utf-8") as f:
+                f.write(markdown_content)
+            print(f"\n✓ Saved report to: {output_path}")
+            
+            # Save PPT Design
+            if ppt_result and ppt_result.get("slides"):
+                ppt_file_path = self._save_ppt_design_file(
+                    business_idea, bp_structure, ppt_result, output_path
+                )
+                if ppt_file_path:
+                    ppt_design_file = ppt_file_path
+                    print(f"✓ PPT design file saved: {ppt_file_path}")
+            
+            # Save Partner Report
             if partner_search_result:
-                partner_count = partner_search_result.get("partner_count", 0)
-                investor_count = partner_search_result.get("investor_count", 0)
-                partner_query = partner_search_result.get("partner_search_query", "")
-                investor_query = partner_search_result.get("investor_search_query", "")
-                print(f"\n[DEBUG] 合伙人搜索结果: {partner_count} 个合伙人, {investor_count} 个投资人")
-                print(f"[DEBUG] 合伙人搜索短语: {partner_query}")
-                print(f"[DEBUG] 投资人搜索短语: {investor_query}")
-            else:
-                print("\n[DEBUG] 合伙人搜索结果为空，将不会添加到报告中")
-                # 尝试从iteration_history中检查是否有搜索短语
-                for hist in iteration_history:
-                    if hist.get("iteration") == "partner_search":
-                        search_result = hist.get("partner_search_result")
-                        if search_result:
-                            partner_query = search_result.get("partner_search_query", "")
-                            investor_query = search_result.get("investor_search_query", "")
-                            if partner_query or investor_query:
-                                print(f"[DEBUG] 发现搜索短语但结果为空:")
-                                print(f"[DEBUG]   合伙人搜索短语: {partner_query}")
-                                print(f"[DEBUG]   投资人搜索短语: {investor_query}")
-                        break
-            
-            markdown_content = self._build_markdown(
-                business_idea, bp_structure, iteration_history, evaluation_result, partner_search_result
-            )
-
-            # 从iteration_history中提取ppt_result（如果存在）
-            if not ppt_result:
-                for hist in iteration_history:
-                    if hist.get("iteration") == "ppt_generation":
-                        ppt_result = hist.get("ppt_result")
-                        if ppt_result:
-                            break
-            
-            # 调试信息：检查ppt_result
-            if ppt_result:
-                slides = ppt_result.get("slides", [])
-                if slides:
-                    print(f"\n检测到PPT结果，包含 {len(slides)} 页幻灯片")
-                else:
-                    print("\n警告: PPT结果存在但slides为空")
-
-            if save_report:
-                output_path = output_file or self._build_default_filename(business_idea, session_dir)
-                os.makedirs(os.path.dirname(output_path), exist_ok=True)
-                with open(output_path, "w", encoding="utf-8") as f:
-                    f.write(markdown_content)
-                print("\n" + "=" * 60)
-                print("Markdown已保存")
-                print("=" * 60)
-                print(f"输出文件: {output_path}")
-                
-                # 如果生成了PPT，保存到单独的文件
-                print(f"\n[DEBUG] 检查PPT保存条件:")
-                print(f"  - ppt_result存在: {ppt_result is not None}")
-                if ppt_result:
-                    slides = ppt_result.get("slides", [])
-                    print(f"  - slides存在: {slides is not None}")
-                    print(f"  - slides长度: {len(slides) if slides else 0}")
-                    if slides and len(slides) > 0:
-                        print(f"  - 条件满足，开始保存PPT设计文件...")
-                        try:
-                            ppt_file_path = self._save_ppt_design_file(
-                                business_idea, bp_structure, ppt_result, output_path
-                            )
-                            if ppt_file_path:
-                                print(f"PPT设计文件已保存: {ppt_file_path}")
-                            else:
-                                print("警告: PPT设计文件保存失败")
-                        except Exception as e:
-                            print(f"保存PPT设计文件时出错: {e}")
-                            traceback.print_exc()
-                    else:
-                        print("提示: PPT结果存在但slides为空，跳过PPT设计文件保存")
-                else:
-                    print("提示: 未生成PPT内容，跳过PPT设计文件保存")
-                
-                # 保存人脉报告（合伙人搜索结果）
-                partner_report_path = None
-                if partner_search_result:
-                    partner_count = partner_search_result.get("partner_count", 0)
-                    investor_count = partner_search_result.get("investor_count", 0)
-                    partner_query = partner_search_result.get("partner_search_query", "")
-                    investor_query = partner_search_result.get("investor_search_query", "")
-                    if partner_count > 0 or investor_count > 0 or partner_query or investor_query:
-                        try:
-                            partner_report_path = self._save_partner_report(
-                                business_idea, partner_search_result, output_path
-                            )
-                            if partner_report_path:
-                                print(f"\n✓ 人脉报告已保存: {partner_report_path}")
-                            else:
-                                print("\n警告: 人脉报告保存失败")
-                        except Exception as e:
-                            print(f"\n保存人脉报告时出错: {e}")
-                            traceback.print_exc()
-                
-                # 从保存的PPT文件路径中提取ppt_design_file
-                ppt_design_file = None
-                if ppt_result and output_path:
-                    base_name = os.path.splitext(os.path.basename(output_path))[0]
-                    ppt_dir = os.path.dirname(output_path)
-                    ppt_design_file = os.path.join(ppt_dir, f"{base_name}_ppt_design.md")
-                    if not os.path.exists(ppt_design_file):
-                        ppt_design_file = None
-            else:
-                print("\n[DEBUG] save_report为False，跳过文件保存")
-                output_path = None
-                partner_report_path = None
-                ppt_design_file = None
-
-            return {
-                "output_file": output_path,
-                "markdown": markdown_content,
-                "bp_structure": bp_structure,
-                "iteration_history": iteration_history,
-                "evaluation_result": evaluation_result,
-                "pitch_result": pitch_result,
-                "ppt_result": ppt_result,
-                "partner_search_result": partner_search_result,
-                "partner_report_file": partner_report_path if save_report and partner_search_result else None,
-                "ppt_design_file": ppt_design_file if save_report and ppt_result else None,
-                "session_id": session_id,
-                "session_dir": session_dir if save_report else None,
-                "input_completeness": completeness_result,
-            }
-
-        except Exception as exc:
-            print(f"生成过程中发生错误: {exc}")
-            raise
+                partner_report_path = self._save_partner_report(
+                    business_idea, partner_search_result, output_path
+                )
+                if partner_report_path:
+                    print(f"✓ Partner report saved: {partner_report_path}")
+        
+        return {
+            "output_file": output_path,
+            "markdown": markdown_content,
+            "bp_structure": bp_structure,
+            "iteration_history": iteration_history,
+            "evaluation_result": evaluation_result,
+            "pitch_result": pitch_result,
+            "ppt_result": ppt_result,
+            "partner_search_result": partner_search_result,
+            "partner_report_file": partner_report_path,
+            "ppt_design_file": ppt_design_file,
+            "session_id": session_id,
+            "session_dir": session_dir if save_report else None,
+            "input_completeness": completeness,
+        }
 
     # ---------------------------------------------------------------------- #
     # Markdown 构建 & 工具方法
     # ---------------------------------------------------------------------- #
 
-    def _build_default_filename(self, business_idea: str, session_dir: Optional[str] = None) -> str:
+    def _build_default_filename(self, business_idea: str, session_id: Optional[str] = None, session_dir: Optional[str] = None) -> str:
+        """
+        构建默认输出文件名
+        
+        Args:
+            business_idea: 商业创意
+            session_id: Session ID（优先使用）
+            session_dir: Session目录路径（向后兼容，如果提供了session_id则会被忽略）
+            
+        Returns:
+            输出文件路径
+        """
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_idea = "".join(
             c for c in business_idea[:30] if c.isalnum() or c in (" ", "-", "_")
         ).rstrip()
         safe_idea = safe_idea.replace(" ", "_")
         
-        # 如果提供了session_dir，使用session_dir作为输出目录
-        output_dir = session_dir if session_dir else self.config.output_dir
+        # Determine output directory
+        # Priority: session_dir (for backward compatibility) > session_id > default output_dir
+        if session_dir:
+            output_dir = session_dir
+        elif session_id:
+            # Convert session_id to session_dir (filesystem implementation)
+            output_dir = self._get_session_dir(session_id)
+        else:
+            output_dir = self.config.output_dir
+            
         return os.path.join(
             output_dir, f"bp_structure_{safe_idea}_{timestamp}.md"
         )

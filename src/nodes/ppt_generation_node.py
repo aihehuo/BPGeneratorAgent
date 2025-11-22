@@ -116,8 +116,8 @@ class PPTGenerationNode(BaseNode):
             # 将输入转换为JSON字符串，并在前面添加语言指令
             message = lang_instruction + json.dumps(formatted_input, ensure_ascii=False)
             
-            # 调用LLM
-            response = self.llm_client.invoke(SYSTEM_PROMPT_PPT_GENERATION, message)
+            # 调用LLM (使用新的 invoke_llm 方法)
+            response = self.invoke_llm(SYSTEM_PROMPT_PPT_GENERATION, message)
             
             if not response:
                 raise ValueError("LLM返回空响应")

@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import uvicorn
 
-from src.bp_agent import BPGenerationAgent, create_bp_agent
+from src.bp_generation_agent import BPGenerationAgent, create_bp_agent
 from src.utils.config import load_config
 
 
@@ -127,27 +127,23 @@ async def generate_bp(request: GenerateBPRequest):
         agent = get_agent()
         
         # 如果提供了session_id，验证格式
-        if request.session_id:
+        session_id = request.session_id
+        if session_id:
             try:
-                uuid.UUID(request.session_id)
+                uuid.UUID(session_id)
             except ValueError:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"无效的session_id格式: {request.session_id}。必须是有效的UUID格式。"
+                    detail=f"无效的session_id格式: {session_id}。必须是有效的UUID格式。"
                 )
-            # 构建session_dir（如果提供了session_id）
-            config = load_config()
-            session_dir = os.path.join(config.output_dir, request.session_id)
-        else:
-            # 如果没有提供session_id，传递None，让bp_agent自己生成
-            session_dir = None
+        # 如果没有提供session_id，传递None，让bp_agent自己生成
         
-        # 调用generate_bp方法，传入session_dir（可能为None）
+        # 调用generate_bp方法，传入session_id（可能为None）
         result = agent.generate_bp(
             business_idea=request.business_idea,
             output_file=request.output_file,
             save_report=request.save_report,
-            session_dir=session_dir
+            session_id=session_id
         )
         
         # 构建响应数据
@@ -237,26 +233,22 @@ async def generate_bp_preview(request: GenerateBPRequest):
         agent = get_agent()
         
         # 如果提供了session_id，验证格式
-        if request.session_id:
+        session_id = request.session_id
+        if session_id:
             try:
-                uuid.UUID(request.session_id)
+                uuid.UUID(session_id)
             except ValueError:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"无效的session_id格式: {request.session_id}。必须是有效的UUID格式。"
+                    detail=f"无效的session_id格式: {session_id}。必须是有效的UUID格式。"
                 )
-            # 构建session_dir（如果提供了session_id）
-            config = load_config()
-            session_dir = os.path.join(config.output_dir, request.session_id)
-        else:
-            # 如果没有提供session_id，传递None，让bp_agent自己生成
-            session_dir = None
+        # 如果没有提供session_id，传递None，让bp_agent自己生成
         
         result = agent.generate_bp(
             business_idea=request.business_idea,
             output_file=request.output_file,
             save_report=request.save_report,
-            session_dir=session_dir
+            session_id=session_id
         )
         
         markdown_content = result.get("markdown") or ""

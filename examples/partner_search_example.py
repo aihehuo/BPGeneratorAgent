@@ -71,20 +71,31 @@ def partner_search_example():
         print("示例1: 基本合伙人员搜索")
         print("=" * 60)
         
-        requirement = "寻找有AI技术背景和创业经验的合伙人"
-        print(f"\n合伙需求: {requirement}")
+        business_idea = "我想创建一个基于AI的在线教育平台，主要面向K12学生"
+        # 提供一个简单的BP结构用于搜索
+        bp_structure = [
+            {"title": "项目概述", "content": "基于AI的在线教育平台，面向K12学生提供个性化学习服务"},
+            {"title": "团队需求", "content": "需要寻找有AI技术背景和创业经验的合伙人"}
+        ]
+        
+        print(f"\n商业创意: {business_idea}")
+        print(f"BP结构: {len(bp_structure)} 个段落")
         
         result = search_node.run(
-            input_data={"requirement": requirement},
-            per_page=5
+            input_data={
+                "business_idea": business_idea,
+                "bp_structure": bp_structure
+            },
+            partner_per_page=5,
+            investor_per_page=5
         )
         
         print(f"\n搜索结果:")
-        print(f"- 搜索查询: {result.get('query')}")
-        print(f"- 找到 {result.get('total_count', 0)} 个结果")
+        print(f"- 合伙人搜索查询: {result.get('partner_search_query')}")
+        print(f"- 找到 {result.get('partner_count', 0)} 个合伙人")
         
-        for i, person in enumerate(result.get('results', [])[:3], 1):
-            print(f"\n结果 {i}:")
+        for i, person in enumerate(result.get('partner_results', [])[:3], 1):
+            print(f"\n合伙人结果 {i}:")
             print(f"  用户ID: {person.get('user_id')}")
             print(f"  姓名: {person.get('name')}")
             if person.get('bio'):
@@ -92,55 +103,82 @@ def partner_search_example():
             if person.get('tags'):
                 print(f"  标签: {', '.join(person.get('tags', [])[:5])}")
         
-        # 示例2: 使用LLM优化搜索查询
+        # 示例2: 完整BP结构搜索
         if llm_client:
             print("\n" + "=" * 60)
-            print("示例2: 使用LLM优化搜索查询")
+            print("示例2: 完整BP结构搜索")
             print("=" * 60)
             
-            business_idea = "我想创建一个基于AI的在线教育平台，主要面向K12学生"
-            partner_requirement = "需要技术合伙人，熟悉AI和教育领域"
+            business_idea = "我想开发一个智能健康管理应用，结合AI算法为用户提供个性化健康建议"
+            bp_structure = [
+                {"title": "项目概述", "content": "智能健康管理应用，通过AI算法分析用户健康数据，提供个性化健康建议和运动方案"},
+                {"title": "技术需求", "content": "需要技术合伙人，熟悉AI算法、健康数据分析、移动应用开发"},
+                {"title": "市场定位", "content": "面向关注健康的中青年人群，提供科学、个性化的健康管理服务"},
+                {"title": "融资需求", "content": "寻求早期投资，用于产品开发和市场推广"}
+            ]
             
             print(f"\n商业创意: {business_idea}")
-            print(f"合伙需求: {partner_requirement}")
+            print(f"BP结构: {len(bp_structure)} 个段落")
             
-            result = search_node.search_with_llm_optimization(
-                business_idea=business_idea,
-                partner_requirement=partner_requirement,
-                per_page=5
+            result = search_node.run(
+                input_data={
+                    "business_idea": business_idea,
+                    "bp_structure": bp_structure
+                },
+                partner_per_page=5,
+                investor_per_page=5
             )
             
             print(f"\n搜索结果:")
-            print(f"- 优化后的搜索查询: {result.get('query')}")
-            print(f"- 找到 {result.get('total_count', 0)} 个结果")
+            print(f"- 合伙人搜索查询: {result.get('partner_search_query')}")
+            print(f"- 找到 {result.get('partner_count', 0)} 个合伙人")
+            print(f"- 投资人搜索查询: {result.get('investor_search_query')}")
+            print(f"- 找到 {result.get('investor_count', 0)} 个投资人")
             
-            for i, person in enumerate(result.get('results', [])[:3], 1):
-                print(f"\n结果 {i}:")
+            # 显示合伙人结果
+            for i, person in enumerate(result.get('partner_results', [])[:3], 1):
+                print(f"\n合伙人结果 {i}:")
+                print(f"  用户ID: {person.get('user_id')}")
+                print(f"  姓名: {person.get('name')}")
+                if person.get('bio'):
+                    print(f"  简介: {person.get('bio', '')[:100]}...")
+            
+            # 显示投资人结果
+            for i, person in enumerate(result.get('investor_results', [])[:3], 1):
+                print(f"\n投资人结果 {i}:")
                 print(f"  用户ID: {person.get('user_id')}")
                 print(f"  姓名: {person.get('name')}")
                 if person.get('bio'):
                     print(f"  简介: {person.get('bio', '')[:100]}...")
         
-        # 示例3: 搜索投资人
+        # 示例3: 仅搜索投资人
         print("\n" + "=" * 60)
-        print("示例3: 搜索投资人")
+        print("示例3: 仅搜索投资人")
         print("=" * 60)
         
-        requirement = "寻找早期投资人或天使投资人"
-        print(f"\n合伙需求: {requirement}")
+        business_idea = "寻找早期投资人或天使投资人，支持AI教育项目"
+        bp_structure = [
+            {"title": "项目概述", "content": "AI教育平台项目"},
+            {"title": "融资需求", "content": "寻找早期投资人或天使投资人，专注于教育科技领域的投资"}
+        ]
+        
+        print(f"\n商业创意: {business_idea}")
         
         result = search_node.run(
-            input_data={"requirement": requirement},
-            investor=True,
-            per_page=5
+            input_data={
+                "business_idea": business_idea,
+                "bp_structure": bp_structure
+            },
+            partner_per_page=0,  # 不搜索合伙人
+            investor_per_page=5
         )
         
         print(f"\n搜索结果:")
-        print(f"- 搜索查询: {result.get('query')}")
-        print(f"- 找到 {result.get('total_count', 0)} 个投资人")
+        print(f"- 投资人搜索查询: {result.get('investor_search_query')}")
+        print(f"- 找到 {result.get('investor_count', 0)} 个投资人")
         
-        for i, person in enumerate(result.get('results', [])[:3], 1):
-            print(f"\n结果 {i}:")
+        for i, person in enumerate(result.get('investor_results', [])[:3], 1):
+            print(f"\n投资人结果 {i}:")
             print(f"  用户ID: {person.get('user_id')}")
             print(f"  姓名: {person.get('name')}")
             if person.get('bio'):

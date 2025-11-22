@@ -4,24 +4,9 @@
 """
 
 import json
-import os
-from datetime import datetime
 from typing import Dict, Any, Tuple, Optional
 from json.decoder import JSONDecodeError
 
-try:
-    from langchain_core.chat_history import BaseChatMessageHistory
-    from langchain_community.chat_message_histories import FileChatMessageHistory
-    from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
-    LANGCHAIN_AVAILABLE = True
-except ImportError:
-    # 如果 LangChain 不可用，使用回退方案
-    LANGCHAIN_AVAILABLE = False
-    BaseChatMessageHistory = None
-    FileChatMessageHistory = None
-    HumanMessage = None
-    AIMessage = None
-    BaseMessage = None
 
 from .base_node import BaseNode
 from ..utils.text_processing import (
@@ -131,65 +116,7 @@ class InputCompletenessNode(BaseNode):
             llm_client: LLM客户端
         """
         super().__init__(llm_client, "InputCompletenessNode")
-        
-        if not LANGCHAIN_AVAILABLE:
-            self.log_info("警告: LangChain 未安装，将使用文件系统回退方案管理会话历史")
     
-    def _get_tmp_session_dir(self, session_dir: Optional[str] = None) -> Optional[str]:
-        """
-        获取 /tmp 下的 session 目录路径
-        
-        Args:
-            session_dir: Session目录路径（可选）
-            
-        Returns:
-            /tmp 下的 session 目录路径，如果 session_dir 为 None 则返回 None
-        """
-        if not session_dir:
-            return None
-        
-        # 从 session_dir 中提取 session_id（通常是目录名）
-        session_id = os.path.basename(session_dir.rstrip(os.sep))
-        
-        # 在 /tmp 下创建 session 目录
-        tmp_session_dir = os.path.join("/tmp", "bp_agent_sessions", session_id)
-        return tmp_session_dir
-    
-    def _get_chat_history(self, session_dir: Optional[str] = None):
-        """
-        获取或创建会话历史对象
-        
-        Args:
-            session_dir: Session目录路径（可选）
-            
-        Returns:
-            ChatMessageHistory 对象，如果 session_dir 为 None 或 LangChain 不可用则返回 None
-        """
-        if not LANGCHAIN_AVAILABLE or not session_dir:
-            return None
-        
-        try:
-            # 获取 /tmp 下的 session 目录路径
-            tmp_session_dir = self._get_tmp_session_dir(session_dir)
-            if not tmp_session_dir:
-                return None
-            
-            # 确保目录存在
-            os.makedirs(tmp_session_dir, exist_ok=True)
-            
-            # 创建文件路径（使用 .jsonl 格式，这是 LangChain FileChatMessageHistory 的标准格式）
-            history_file = os.path.join(tmp_session_dir, "chat_history.jsonl")
-            
-            # 创建 FileChatMessageHistory 实例
-            # 注意：FileChatMessageHistory 支持 file_path 参数
-            chat_history = FileChatMessageHistory(file_path=history_file)
-            self.log_info(f"聊天历史存储在: {history_file}")
-            return chat_history
-        except Exception as e:
-            self.log_error(f"创建会话历史对象失败: {str(e)}")
-            import traceback
-            self.log_error(f"详细错误: {traceback.format_exc()}")
-            return None
     
     def _get_checkpoint_names(self, perspective: str) -> Dict[str, str]:
         """
@@ -402,194 +329,16 @@ Analyze from three perspectives (technical, user painpoint, market) and determin
         
         return system_prompt, user_prompt
     
-    def _load_previous_inputs(self, session_dir: Optional[str] = None) -> str:
-        """
-        加载之前的用户输入（使用 LangChain ChatMessageHistory）
-        
-        Args:
-            session_dir: Session目录路径（可选）
-            
-        Returns:
-            合并后的所有用户输入文本，如果没有之前的输入则返回空字符串
-        """
-        # 优先使用 LangChain 的历史记录
-        if LANGCHAIN_AVAILABLE:
-            try:
-                chat_history = self._get_chat_history(session_dir)
-                if chat_history:
-                    messages = chat_history.messages
-                    # 提取所有 HumanMessage 的内容（用户输入）
-                    inputs = []
-                    for message in messages:
-                        if isinstance(message, HumanMessage):
-                            content = message.content
-                            if content and content.strip():
-                                inputs.append(content.strip())
-                    
-                    if inputs:
-                        # 合并所有之前的输入
-                        combined = "\n\n".join(inputs)
-                        self.log_info(f"从 LangChain 历史记录加载了 {len(inputs)} 条之前的用户输入")
-                        return combined
-            except Exception as e:
-                self.log_error(f"从 LangChain 加载之前的用户输入失败: {str(e)}，尝试回退到文件系统")
-        
-        # 回退到文件系统方案（兼容旧数据）
-        try:
-            if not session_dir:
-                return ""
-            
-            file_path = os.path.join(session_dir, "previous_user_inputs.md")
-            if not os.path.exists(file_path):
-                return ""
-            
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
-            
-            # 提取所有商业创意内容
-            # 格式：## 输入记录 或 ## Input Record 后面跟着 **商业创意**: 或 **Business Idea**:
-            inputs = []
-            
-            # 检测语言
-            is_english = "## Input Record" in content or "**Business Idea**" in content
-            
-            if is_english:
-                # 英文格式
-                import re
-                pattern = r'## Input Record.*?\*\*Business Idea\*\*:\s*\n\n(.*?)(?=\n\n---|\n\n##|$)'
-                matches = re.findall(pattern, content, re.DOTALL)
-                for match in matches:
-                    idea = match.strip()
-                    if idea:
-                        inputs.append(idea)
-            else:
-                # 中文格式
-                import re
-                pattern = r'## 输入记录.*?\*\*商业创意\*\*:\s*\n\n(.*?)(?=\n\n---|\n\n##|$)'
-                matches = re.findall(pattern, content, re.DOTALL)
-                for match in matches:
-                    idea = match.strip()
-                    if idea:
-                        inputs.append(idea)
-            
-            if inputs:
-                # 合并所有之前的输入
-                combined = "\n\n".join(inputs)
-                self.log_info(f"从文件系统加载了 {len(inputs)} 条之前的用户输入")
-                return combined
-            else:
-                return ""
-                
-        except Exception as e:
-            self.log_error(f"加载之前的用户输入失败: {str(e)}")
-            return ""
-    
-    def _save_user_input(self, business_idea: str, session_dir: Optional[str] = None, completeness_result: Optional[Dict[str, Any]] = None) -> Optional[str]:
-        """
-        保存用户输入到 LangChain ChatMessageHistory
-        
-        Args:
-            business_idea: 商业创意
-            session_dir: Session目录路径（可选）
-            completeness_result: 完整性检查结果（可选），如果提供则保存为 AI 消息
-            
-        Returns:
-            保存的历史文件路径，如果失败则返回None
-        """
-        if not session_dir:
-            self.log_info("未提供session_dir，跳过保存用户输入")
-            return None
-        
-        # 优先使用 LangChain 保存
-        if LANGCHAIN_AVAILABLE:
-            try:
-                chat_history = self._get_chat_history(session_dir)
-                if chat_history:
-                    # 保存用户输入为 HumanMessage
-                    chat_history.add_user_message(business_idea)
-                    
-                    # 如果有完整性检查结果，保存为 AI 消息
-                    if completeness_result:
-                        # 构建结果摘要
-                        is_complete = completeness_result.get("is_complete", False)
-                        perspective = completeness_result.get("current_perspective", "none")
-                        suggestions = completeness_result.get("suggestions", [])
-                        
-                        result_summary = f"输入完整性检查结果:\n"
-                        result_summary += f"- 是否完整: {'是' if is_complete else '否'}\n"
-                        result_summary += f"- 当前视角: {perspective}\n"
-                        if suggestions:
-                            result_summary += f"- 改进建议: {', '.join(suggestions[:3])}\n"
-                        
-                        chat_history.add_ai_message(result_summary)
-                    
-                    # 获取历史文件路径（在 /tmp 下）
-                    tmp_session_dir = self._get_tmp_session_dir(session_dir)
-                    if tmp_session_dir:
-                        history_file = os.path.join(tmp_session_dir, "chat_history.jsonl")
-                        self.log_info(f"用户输入已保存到 LangChain 历史记录: {history_file}")
-                        return history_file
-            except Exception as e:
-                self.log_error(f"使用 LangChain 保存用户输入失败: {str(e)}，尝试回退到文件系统")
-        
-        # 回退到文件系统方案（兼容性）
-        try:
-            # 确保session目录存在
-            os.makedirs(session_dir, exist_ok=True)
-            
-            # 生成文件路径
-            file_path = os.path.join(session_dir, "previous_user_inputs.md")
-            
-            # 检测语言
-            is_english = detect_language(business_idea) == 'en'
-            
-            # 构建文档内容
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            
-            if is_english:
-                content = f"# Previous User Inputs\n\n"
-                content += f"## Input Record\n\n"
-                content += f"**Timestamp**: {timestamp}\n\n"
-                content += f"**Business Idea**:\n\n"
-                content += f"{business_idea}\n\n"
-                content += "---\n\n"
-            else:
-                content = f"# 用户输入记录\n\n"
-                content += f"## 输入记录\n\n"
-                content += f"**时间戳**: {timestamp}\n\n"
-                content += f"**商业创意**:\n\n"
-                content += f"{business_idea}\n\n"
-                content += "---\n\n"
-            
-            # 如果文件已存在，追加内容
-            if os.path.exists(file_path):
-                with open(file_path, "r", encoding="utf-8") as f:
-                    existing_content = f.read()
-                # 在文件开头追加新内容
-                content = content + existing_content
-                mode = "w"  # 重新写入整个文件
-            else:
-                mode = "w"  # 创建新文件
-            
-            # 写入文件
-            with open(file_path, mode, encoding="utf-8") as f:
-                f.write(content)
-            
-            self.log_info(f"用户输入已保存到文件系统: {file_path}")
-            return file_path
-            
-        except Exception as e:
-            self.log_error(f"保存用户输入失败: {str(e)}")
-            return None
-    
-    def run(self, business_idea: str, session_dir: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+    def run(self, business_idea: str, previous_inputs: Optional[str] = None, session_id: Optional[str] = None, session_dir: Optional[str] = None, **kwargs) -> Dict[str, Any]:
         """
         执行输入完整性检查
         
         Args:
             business_idea: 商业创意
-            session_dir: Session目录路径（可选），如果提供则保存用户输入，并且会加载之前的输入一起检查
-            **kwargs: 额外参数
+            previous_inputs: 之前的用户输入（可选），如果提供则与当前输入合并检查
+            session_id: Session ID（可选），用于向后兼容的文件系统保存
+            session_dir: Session目录路径（可选，向后兼容），用于文件系统保存
+            **kwargs: 额外参数（保留用于向后兼容）
             
         Returns:
             Dict[str, Any]: 检查结果，包含：
@@ -597,22 +346,28 @@ Analyze from three perspectives (technical, user painpoint, market) and determin
                 - current_perspective: str, 当前视角
                 - perspective_details: dict, 各视角的详细信息
                 - suggestions: list, 改进建议
-                - saved_input_file: str, 保存的用户输入文件路径（如果保存成功）
+        
+        Note:
+            Chat history persistence is now handled at the wrapper level (InputNode).
+            This method focuses only on the core completeness checking logic.
+            session_id/session_dir are kept for backward compatibility when used outside the graph.
         """
         try:
             self.log_info("正在检查输入完整性...")
             
-            # 加载之前的输入（如果提供了session_dir）
-            previous_inputs = ""
-            if session_dir:
-                previous_inputs = self._load_previous_inputs(session_dir)
+            # Note: previous_inputs should be provided by the wrapper (InputNode)
+            # Chat history management is now handled at the workflow level
             
-            # 合并之前的输入和当前输入
+            # 合并之前的输入和当前输入（如果提供了previous_inputs且不为空）
             if previous_inputs:
                 combined_input = f"{previous_inputs}\n\n---\n\n当前输入:\n{business_idea}"
                 self.log_info("已合并之前的输入和当前输入一起检查")
+                # 记录合并后的输入（截断过长的内容）
+                input_preview = combined_input[:500] + "..." if len(combined_input) > 500 else combined_input
+                self.log_info(f"合并后的输入预览（总长度: {len(combined_input)} 字符）:\n{input_preview}")
             else:
                 combined_input = business_idea
+                self.log_info(f"当前输入（无历史记录，长度: {len(combined_input)} 字符）:\n{combined_input[:500] + '...' if len(combined_input) > 500 else combined_input}")
             
             # 检测语言（使用合并后的输入）
             is_english = detect_language(combined_input) == 'en'
@@ -620,20 +375,16 @@ Analyze from three perspectives (technical, user painpoint, market) and determin
             # 构建提示词（使用合并后的输入）
             system_prompt, user_prompt = self._build_prompt(combined_input, is_english)
             
-            # 调用LLM
-            response = self.llm_client.invoke(system_prompt, user_prompt)
+            # 调用LLM (使用新的 invoke_llm 方法)
+            response = self.invoke_llm(system_prompt, user_prompt)
             
             # 处理响应
             result = self.process_output(response)
             
-            # 保存用户输入和检查结果（在检查之后保存，这样不会影响当前检查）
-            saved_file = None
-            if session_dir:
-                saved_file = self._save_user_input(business_idea, session_dir, completeness_result=result)
-            
-            # 添加保存的文件路径
-            if saved_file:
-                result["saved_input_file"] = saved_file
+            # Note: Chat history persistence is now handled at the wrapper level
+            # Add session_id to result if available
+            if session_id:
+                result["session_id"] = session_id
             
             self.log_info(f"输入完整性检查完成: is_complete={result.get('is_complete')}, perspective={result.get('current_perspective')}")
             return result

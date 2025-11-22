@@ -8,13 +8,23 @@ import os
 import sys
 import argparse
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Tuple
 
 # 添加src目录到Python路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from src.bp_agent import BPGenerationAgent, create_bp_agent
+from src.bp_generation_agent import BPGenerationAgent, create_bp_agent
 from src.utils.config import Config, load_config, print_config
+from src.utils.text_processing import detect_language
+
+# Graph-based imports (optional)
+try:
+    from langchain_openai import ChatOpenAI
+    from src.graph.workflow import create_bp_graph
+    from src.graph.chat_history import ChatHistoryManager
+    GRAPH_AVAILABLE = True
+except ImportError:
+    GRAPH_AVAILABLE = False
 
 
 def get_input(prompt: str, default: Optional[str] = None, password: bool = False) -> str:
@@ -72,7 +82,7 @@ def get_number(prompt: str, min_val: int, max_val: int, default: int) -> int:
             print("请输入有效的数字")
 
 
-def configure_agent_interactive() -> Config:
+def configure_agent_interactive() -> Tuple[Config, bool]:
     """交互式配置Agent"""
     print("\n" + "=" * 60)
     print("BP Generation Agent - 配置向导")
@@ -84,7 +94,17 @@ def configure_agent_interactive() -> Config:
         print("\n检测到现有配置文件")
         use_existing = get_input("是否使用现有配置？", default="y").lower()
         if use_existing in ['y', 'yes', '是']:
-            return existing_config
+            # 仍然询问实现方式
+            if GRAPH_AVAILABLE:
+                implementation_choice = get_choice(
+                    "选择实现方式",
+                    ["传统实现 (Traditional)", "LangGraph实现 (Graph-based)"],
+                    default="传统实现 (Traditional)"
+                )
+                use_graph = "LangGraph" in implementation_choice
+                return existing_config, use_graph
+            else:
+                return existing_config, False
     except:
         pass
     
@@ -154,6 +174,25 @@ def configure_agent_interactive() -> Config:
     max_iterations = get_number("最大迭代次数", 1, 5, 3)
     output_dir = get_input("输出目录", default="reports")
     
+    # 实现方式选择
+    print("\n" + "-" * 60)
+    print("实现方式")
+    print("-" * 60)
+    
+    if GRAPH_AVAILABLE:
+        implementation_choice = get_choice(
+            "选择实现方式",
+            ["传统实现 (Traditional)", "LangGraph实现 (Graph-based)"],
+            default="传统实现 (Traditional)"
+        )
+        use_graph = "LangGraph" in implementation_choice
+        if use_graph:
+            print("\n提示: LangGraph实现使用状态图工作流，提供更好的状态管理和可扩展性")
+    else:
+        print("提示: LangGraph未安装，只能使用传统实现")
+        print("安装命令: pip install langgraph langchain-openai")
+        use_graph = False
+    
     # 创建配置对象
     config = Config(
         deepseek_api_key=deepseek_key,
@@ -171,7 +210,8 @@ def configure_agent_interactive() -> Config:
         print("\n配置验证失败，请检查API密钥")
         sys.exit(1)
     
-    return config
+    # Return config and use_graph flag as a tuple
+    return config, use_graph
 
 
 def display_examples():
@@ -220,6 +260,182 @@ def get_business_idea() -> str:
         sys.exit(1)
     
     return business_idea
+
+
+def get_llm_for_graph(config):
+    """Initialize LangChain Chat Model based on config."""
+    if config.default_llm_provider == "deepseek":
+        return ChatOpenAI(
+            api_key=config.deepseek_api_key,
+            base_url="https://api.deepseek.com",
+            model=config.deepseek_model,
+            temperature=0.7
+        )
+    elif config.default_llm_provider == "openai":
+        return ChatOpenAI(
+            api_key=config.openai_api_key,
+            model=config.openai_model,
+            temperature=0.7
+        )
+    elif config.default_llm_provider == "qwen":
+        return ChatOpenAI(
+            api_key=config.qwen_api_key,
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            model=config.qwen_model,
+            temperature=0.7
+        )
+    else:
+        raise ValueError(f"Unsupported LLM provider: {config.default_llm_provider}")
+
+
+def generate_bp_with_graph(
+    business_idea: str,
+    config: Config,
+    session_id: Optional[str],
+    save_report: bool = True
+) -> dict:
+    """Generate BP using LangGraph implementation."""
+    import uuid
+    
+    # Setup session
+    if not session_id:
+        session_id = str(uuid.uuid4())
+    else:
+        # Validate session_id format
+        try:
+            uuid.UUID(session_id)
+        except (ValueError, AttributeError):
+            print(f"警告: 提供的session_id不是有效UUID格式，将生成新的Session ID")
+            session_id = str(uuid.uuid4())
+    
+    # Convert session_id to session_dir (filesystem-based implementation)
+    # TODO: In the future, this can be changed to Redis or other storage backends
+    session_dir = os.path.join(config.output_dir, session_id) if save_report else None
+    if session_dir:
+        os.makedirs(session_dir, exist_ok=True)
+    
+    # Initialize LLM
+    llm = get_llm_for_graph(config)
+    
+    # Initialize workflow-level chat history manager
+    chat_history_manager = ChatHistoryManager(session_id=session_id)
+    
+    # Create Graph with chat history manager
+    graph = create_bp_graph(llm, config.aihehuo_api_key, config.aihehuo_api_base, chat_history_manager=chat_history_manager)
+    
+    # Initial State (use session_id as primary identifier)
+    inputs = {
+        "business_idea": business_idea,
+        "session_id": session_id,
+        "iteration_count": 0,
+        "max_iterations": 3,
+        "iteration_history": [],
+        "is_english": detect_language(business_idea) == 'en'
+    }
+    
+    # Run Graph
+    final_state = graph.invoke(inputs)
+    
+    # Determine where workflow stopped and persist final state
+    stop_node = None
+    completeness = final_state.get("input_completeness", {})
+    if completeness and not completeness.get("is_complete", False):
+        stop_node = "input_check"
+    else:
+        # Determine the last completed node based on state
+        if final_state.get("partner_search_result"):
+            stop_node = "partner_search"
+        elif final_state.get("ppt_result"):
+            stop_node = "ppt_gen"
+        elif final_state.get("pitch_result"):
+            stop_node = "pitch_gen"
+        elif final_state.get("bp_structure"):
+            stop_node = "investor_eval"
+        elif final_state.get("evaluation_result"):
+            stop_node = "structure_eval"
+        else:
+            stop_node = "end"
+    
+    # Persist final workflow state to chat history
+    if chat_history_manager:
+        chat_history_manager.persist_workflow_state(final_state, stop_node=stop_node)
+    
+    # Check completion
+    if completeness and not completeness.get("is_complete", False):
+        return {
+            "output_file": None,
+            "markdown": None,
+            "bp_structure": None,
+            "iteration_history": [],
+            "evaluation_result": None,
+            "pitch_result": None,
+            "ppt_result": None,
+            "partner_search_result": None,
+            "partner_report_file": None,
+            "ppt_design_file": None,
+            "session_id": session_id,
+            "session_dir": session_dir if save_report else None,
+            "input_completeness": completeness,
+            "error": "Input completeness check failed"
+        }
+    
+    # Post-processing (Markdown & Files)
+    agent_helper = BPGenerationAgent(config)
+    
+    # Build Markdown
+    markdown_content = agent_helper._build_markdown(
+        business_idea,
+        final_state.get("bp_structure", []),
+        final_state.get("iteration_history", []),
+        final_state.get("evaluation_result", {}),
+        final_state.get("partner_search_result")
+    )
+    
+    # Save files if requested
+    output_path = None
+    partner_report_path = None
+    ppt_design_file = None
+    
+    if save_report:
+        output_path = agent_helper._build_default_filename(business_idea, session_id=session_id, session_dir=session_dir)
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(markdown_content)
+        
+        # Save PPT Design
+        ppt_result = final_state.get("ppt_result")
+        if ppt_result and ppt_result.get("slides"):
+            ppt_design_file = agent_helper._save_ppt_design_file(
+                business_idea,
+                final_state.get("bp_structure", []),
+                ppt_result,
+                output_path
+            )
+        
+        # Save Partner Report
+        partner_result = final_state.get("partner_search_result")
+        if partner_result:
+            partner_report_path = agent_helper._save_partner_report(
+                business_idea,
+                partner_result,
+                output_path
+            )
+    
+    return {
+        "output_file": output_path,
+        "markdown": markdown_content,
+        "bp_structure": final_state.get("bp_structure"),
+        "iteration_history": final_state.get("iteration_history", []),
+        "evaluation_result": final_state.get("evaluation_result"),
+        "pitch_result": final_state.get("pitch_result"),
+        "ppt_result": final_state.get("ppt_result"),
+        "partner_search_result": final_state.get("partner_search_result"),
+        "partner_report_file": partner_report_path,
+        "ppt_design_file": ppt_design_file,
+        "session_id": session_id,
+        "session_dir": session_dir if save_report else None,
+        "input_completeness": completeness,
+    }
 
 
 def display_results(result: dict, agent: BPGenerationAgent):
@@ -430,6 +646,7 @@ def main():
   python cli_bp_app.py --idea "我的商业创意"              # 直接指定商业创意
   python cli_bp_app.py --session-id <session_id>         # 使用指定Session ID
   python cli_bp_app.py --session-id <session_id> --idea "新的商业创意"  # 在指定Session中生成
+  python cli_bp_app.py --use-graph --idea "我的商业创意"  # 使用LangGraph实现
         """
     )
     
@@ -463,6 +680,12 @@ def main():
         help='Session ID（可选，用于继续某个session或查看结果）'
     )
     
+    parser.add_argument(
+        '--use-graph',
+        action='store_true',
+        help='使用LangGraph实现（实验性功能）'
+    )
+    
     args = parser.parse_args()
     
     # 显示欢迎信息
@@ -473,39 +696,69 @@ def main():
     
     try:
         # 加载或配置Agent
+        use_graph_from_interactive = False
         if args.config:
             print(f"\n正在加载配置文件: {args.config}")
             config = load_config(args.config)
             print_config(config)
         else:
-            config = configure_agent_interactive()
+            config_result = configure_agent_interactive()
+            if isinstance(config_result, tuple):
+                config, use_graph_from_interactive = config_result
+            else:
+                config = config_result
             print_config(config)
         
         # 如果指定了输出目录，更新配置
         if args.output_dir:
             config.output_dir = args.output_dir
         
-        # 创建Agent
-        print("\n正在初始化BP Generation Agent...")
-        agent = BPGenerationAgent(config)
+        # 选择实现方式 (命令行参数优先，否则使用交互式选择)
+        use_graph = args.use_graph or use_graph_from_interactive
+        if use_graph and not GRAPH_AVAILABLE:
+            print("\n警告: LangGraph未安装，将使用传统实现")
+            print("安装命令: pip install langgraph langchain-openai")
+            use_graph = False
+        
+        # 创建Agent或Graph
+        if use_graph:
+            print("\n正在初始化BP Generation Agent (LangGraph版本)...")
+            agent = None  # We'll use graph directly
+        else:
+            print("\n正在初始化BP Generation Agent...")
+            agent = BPGenerationAgent(config)
         
         # 处理Session ID
-        session_dir = None
-        if args.session_id:
-            session_dir = os.path.join(config.output_dir, args.session_id)
+        session_id = args.session_id
+        if session_id:
+            # Validate session_id format
+            import uuid
+            try:
+                uuid.UUID(session_id)
+            except (ValueError, AttributeError):
+                print(f"\n警告: Session ID格式无效: {session_id}")
+                create_new = get_input("是否生成新的Session ID？", default="y").lower()
+                if create_new not in ['y', 'yes', '是']:
+                    print("已取消")
+                    sys.exit(0)
+                session_id = str(uuid.uuid4())
+                print(f"已生成新的Session ID: {session_id}")
+            
+            # Check if session exists (filesystem-based check for now)
+            # TODO: In the future, this can check Redis or other storage backends
+            session_dir = os.path.join(config.output_dir, session_id)
             if not os.path.exists(session_dir):
-                print(f"\n警告: Session目录不存在: {session_dir}")
+                print(f"\n警告: Session不存在: {session_id}")
                 create_new = get_input("是否创建新的Session？", default="y").lower()
                 if create_new not in ['y', 'yes', '是']:
                     print("已取消")
                     sys.exit(0)
                 os.makedirs(session_dir, exist_ok=True)
-                print(f"已创建新的Session目录: {session_dir}")
+                print(f"已创建新的Session: {session_id}")
             else:
-                print(f"\n使用现有Session: {args.session_id}")
-                print(f"Session目录: {session_dir}")
+                print(f"\n使用现有Session: {session_id}")
                 
-                # 检查是否有previous_user_inputs文件
+                # 检查是否有previous_user_inputs文件（文件系统实现）
                 previous_inputs_file = os.path.join(session_dir, "previous_user_inputs.md")
                 if os.path.exists(previous_inputs_file):
                     view_previous = get_input("是否查看之前的用户输入？", default="n").lower()
@@ -530,10 +783,14 @@ def main():
         print("=" * 60)
         print(f"商业创意: {business_idea[:100]}...")
         print(f"LLM提供商: {config.default_llm_provider}")
+        print(f"实现方式: {'LangGraph' if use_graph else '传统实现'}")
         print(f"输出目录: {config.output_dir}")
-        if session_dir:
-            print(f"Session ID: {args.session_id}")
-            print(f"Session目录: {session_dir}")
+        if session_id:
+            print(f"Session ID: {session_id}")
+            # Only show session_dir if it exists (filesystem implementation detail)
+            session_dir = os.path.join(config.output_dir, session_id)
+            if os.path.exists(session_dir):
+                print(f"Session目录: {session_dir}")
         
         confirm = get_input("\n确认开始生成？", default="y").lower()
         if confirm not in ['y', 'yes', '是']:
@@ -545,11 +802,21 @@ def main():
         print("开始生成商业计划书...")
         print("=" * 60)
         
-        result = agent.generate_bp(
-            business_idea=business_idea,
-            save_report=not args.no_save,
-            session_dir=session_dir
-        )
+        if use_graph:
+            result = generate_bp_with_graph(
+                business_idea=business_idea,
+                config=config,
+                session_id=session_id,
+                save_report=not args.no_save
+            )
+            # Create agent instance for display_results helper methods
+            agent = BPGenerationAgent(config)
+        else:
+            result = agent.generate_bp(
+                business_idea=business_idea,
+                save_report=not args.no_save,
+                session_id=session_id
+            )
         
         # 显示结果
         display_results(result, agent)

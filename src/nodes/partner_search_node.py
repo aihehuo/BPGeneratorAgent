@@ -253,7 +253,7 @@ Requirements:
 - 只返回JSON，不要包含其他解释"""
 
             self.log_info("正在使用LLM提炼搜索短语...")
-            response = self.llm_client.invoke(
+            response = self.invoke_llm(
                 system_prompt,
                 extraction_prompt
             )

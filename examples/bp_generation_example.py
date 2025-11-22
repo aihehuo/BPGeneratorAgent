@@ -9,7 +9,7 @@ import sys
 # 添加项目根目录到Python路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from src.bp_agent import BPGenerationAgent, create_bp_agent
+from src.bp_generation_agent import BPGenerationAgent, create_bp_agent
 from src.utils.config import load_config, print_config
 
 
@@ -45,17 +45,26 @@ def bp_generation_example():
         
         # 显示结果
         print("\n" + "=" * 60)
-        print("商业计划书生成完成！最终报告预览:")
+        print("商业计划书生成完成！")
         print("=" * 60)
-        print(final_report[:1000] + "..." if len(final_report) > 1000 else final_report)
         
-        # 显示进度信息
-        progress = agent.get_progress_summary()
-        print(f"\n进度信息:")
-        print(f"- 总段落数: {progress['total_paragraphs']}")
-        print(f"- 已完成段落: {progress['completed_paragraphs']}")
-        print(f"- 完成进度: {progress['progress_percentage']:.1f}%")
-        print(f"- 是否完成: {progress['is_completed']}")
+        # Extract results from the returned dictionary
+        markdown = final_report.get("markdown", "")
+        bp_structure = final_report.get("bp_structure", [])
+        output_file = final_report.get("output_file", "")
+        
+        if markdown:
+            print("最终报告预览:")
+            print(markdown[:1000] + "..." if len(markdown) > 1000 else markdown)
+        
+        if output_file:
+            print(f"\n报告已保存到: {output_file}")
+        
+        if bp_structure:
+            print(f"\n生成的段落数: {len(bp_structure)}")
+            print("段落标题:")
+            for i, section in enumerate(bp_structure, 1):
+                print(f"  {i}. {section.get('title', 'N/A')}")
         
     except Exception as e:
         print(f"示例运行失败: {str(e)}")
@@ -92,13 +101,23 @@ def bp_generation_simple_example():
         print("\n" + "=" * 60)
         print("商业计划书生成完成！")
         print("=" * 60)
-        print(f"报告长度: {len(final_report)} 字符")
-        print(f"报告段落数: {len(agent.state.paragraphs)}")
         
-        # 显示段落标题
-        print("\n生成的段落:")
-        for i, paragraph in enumerate(agent.state.paragraphs, 1):
-            print(f"  {i}. {paragraph.title}")
+        # Extract results from the returned dictionary
+        markdown = final_report.get("markdown", "")
+        bp_structure = final_report.get("bp_structure", [])
+        output_file = final_report.get("output_file", "")
+        
+        if markdown:
+            print(f"报告长度: {len(markdown)} 字符")
+        
+        if output_file:
+            print(f"报告已保存到: {output_file}")
+        
+        if bp_structure:
+            print(f"报告段落数: {len(bp_structure)}")
+            print("\n生成的段落:")
+            for i, section in enumerate(bp_structure, 1):
+                print(f"  {i}. {section.get('title', 'N/A')}")
         
     except Exception as e:
         print(f"示例运行失败: {str(e)}")
