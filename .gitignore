@@ -72,3 +72,4 @@ streamlit_reports/
 htmlcov/
 .pytest_cache/
 config.py
+sessions
