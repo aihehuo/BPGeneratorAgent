@@ -71,3 +71,4 @@ streamlit_reports/
 .coverage
 htmlcov/
 .pytest_cache/
+config.py
