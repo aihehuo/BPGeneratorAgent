@@ -134,7 +134,7 @@ async def generate_bp(request: GenerateBPRequest):
             except ValueError:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"无效的session_id格式: {session_id}。必须是有效的UUID格式。"
+                    detail=f"Invalid session_id format: {session_id}. Must be a valid UUID format."
                 )
         # 如果没有提供session_id，传递None，让bp_agent自己生成
         
@@ -240,7 +240,7 @@ async def generate_bp_preview(request: GenerateBPRequest):
             except ValueError:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"无效的session_id格式: {session_id}。必须是有效的UUID格式。"
+                    detail=f"Invalid session_id format: {session_id}. Must be a valid UUID format."
                 )
         # 如果没有提供session_id，传递None，让bp_agent自己生成
         
@@ -347,42 +347,74 @@ async def get_file(session_id: str, filename: str):
         
         # 安全检查：确保文件在 session_dir 内
         if not file_path_abs.startswith(session_dir_abs):
-            raise HTTPException(status_code=403, detail="访问被拒绝：文件路径不安全")
+            raise HTTPException(
+                status_code=403, 
+                detail="Access denied: File path is not secure"
+            )
         
         if not os.path.exists(file_path_abs):
             # 提供更详细的错误信息用于调试
             import logging
             logging.error(f"文件不存在: filename={filename}, session_dir={session_dir_abs}, file_path={file_path_abs}, exists={os.path.exists(session_dir_abs)}")
-            raise HTTPException(
-                status_code=404, 
-                detail=f"文件不存在: {filename}\nSession目录: {session_dir_abs}\n查找路径: {file_path_abs}\nSession目录存在: {os.path.exists(session_dir_abs)}"
+            # Use English error messages to avoid encoding issues in HTTP headers
+            error_detail = (
+                f"File not found: {filename}\n"
+                f"Session directory: {session_dir_abs}\n"
+                f"Requested path: {file_path_abs}\n"
+                f"Session directory exists: {os.path.exists(session_dir_abs)}"
             )
+            raise HTTPException(status_code=404, detail=error_detail)
         
         # 读取文件内容（使用绝对路径）
         with open(file_path_abs, "r", encoding="utf-8") as f:
             content = f.read()
         
-        # 根据文件类型设置 Content-Type
-        content_type = "text/plain"
+        # 根据文件类型设置 Content-Type (确保包含UTF-8编码)
+        content_type = "text/plain; charset=utf-8"
         if filename.endswith(".md"):
-            content_type = "text/markdown"
+            content_type = "text/markdown; charset=utf-8"
         elif filename.endswith(".html"):
-            content_type = "text/html"
+            content_type = "text/html; charset=utf-8"
         elif filename.endswith(".json"):
-            content_type = "application/json"
+            content_type = "application/json; charset=utf-8"
         
         from fastapi.responses import Response
+        from urllib.parse import quote
+        
+        # 确保内容以UTF-8编码的字节形式传递
+        content_bytes = content.encode('utf-8')
+        
+        # 处理文件名，确保支持中文和特殊字符
+        safe_filename = os.path.basename(filename)
+        # 对文件名进行URL编码以支持中文
+        encoded_filename = quote(safe_filename.encode('utf-8'), safe='')
+        # 使用 RFC 5987 格式支持UTF-8文件名（只使用UTF-8版本，避免latin-1编码问题）
+        content_disposition = f'inline; filename*=UTF-8\'\'{encoded_filename}'
+        
         return Response(
-            content=content,
+            content=content_bytes,
             media_type=content_type,
             headers={
-                "Content-Disposition": f'inline; filename="{os.path.basename(filename)}"'
+                "Content-Disposition": content_disposition
             }
         )
     except HTTPException:
         raise
+    except UnicodeDecodeError as e:
+        # 处理编码错误
+        raise HTTPException(
+            status_code=500, 
+            detail=f"File encoding error: Cannot read file with UTF-8 encoding. Please check file encoding format. Error: {str(e)}"
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"读取文件失败: {str(e)}")
+        # 确保错误消息可以正确编码
+        error_msg = str(e)
+        try:
+            # 尝试编码错误消息以确保它可以被正确传输
+            error_msg.encode('utf-8')
+        except UnicodeEncodeError:
+            error_msg = "Failed to read file: encoding error"
+        raise HTTPException(status_code=500, detail=error_msg)
 
 
 @app.get("/api/v1/files/{session_id}", tags=["Files"])
@@ -401,7 +433,7 @@ async def list_files(session_id: str):
         session_dir = os.path.join(config.output_dir, session_id)
         
         if not os.path.exists(session_dir):
-            raise HTTPException(status_code=404, detail=f"Session 目录不存在: {session_id}")
+            raise HTTPException(status_code=404, detail=f"Session directory does not exist: {session_id}")
         
         files = []
         for root, dirs, filenames in os.walk(session_dir):
@@ -424,7 +456,12 @@ async def list_files(session_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"列出文件失败: {str(e)}")
+        error_msg = str(e)
+        try:
+            error_msg.encode('utf-8')
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            error_msg = "Failed to list files: encoding error"
+        raise HTTPException(status_code=500, detail=error_msg)
 
 
 def main():

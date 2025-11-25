@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  bp-api-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bp-generation-api-prod
+    ports:
+      - "8000:8000"
+    env_file:
+      - .docker.env
+    volumes:
+      - ./reports:/app/reports
+      - ./sessions:/tmp/bp_agent_sessions
+    restart: always
+    healthcheck:
+      test: ["CMD", "python", "-c", "import http.client; conn = http.client.HTTPConnection('localhost', 8000); conn.request('GET', '/health'); r = conn.getresponse(); exit(0 if r.status == 200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # Production optimizations
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+

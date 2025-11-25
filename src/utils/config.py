@@ -126,6 +126,7 @@ class Config:
 def load_config(config_file: Optional[str] = None) -> Config:
     """
     加载配置
+    优先级：环境变量 > 配置文件
     
     Args:
         config_file: 配置文件路径，如果不指定则使用默认路径
@@ -133,27 +134,84 @@ def load_config(config_file: Optional[str] = None) -> Config:
     Returns:
         配置对象
     """
-    # 确定配置文件路径
-    if config_file:
-        if not os.path.exists(config_file):
-            raise FileNotFoundError(f"配置文件不存在: {config_file}")
-        file_to_load = config_file
-    else:
-        # 尝试加载常见的配置文件
-        for config_path in ["config.py", "config.env", ".env"]:
-            if os.path.exists(config_path):
-                file_to_load = config_path
-                print(f"已找到配置文件: {config_path}")
-                break
-        else:
-            raise FileNotFoundError("未找到配置文件，请创建 config.py 文件")
+    # 首先检查环境变量中是否有API密钥配置（Docker友好）
+    # 去除空字符串和None值
+    env_keys = [
+        os.getenv("DEEPSEEK_API_KEY"),
+        os.getenv("OPENAI_API_KEY"),
+        os.getenv("QWEN_API_KEY"),
+        os.getenv("TAVILY_API_KEY")
+    ]
+    has_env_api_keys = any(key and key.strip() for key in env_keys)
     
-    # 创建配置对象
-    config = Config.from_file(file_to_load)
+    # Debug: 打印环境变量状态（仅显示是否设置，不显示值）
+    if has_env_api_keys:
+        print(f"[DEBUG] 检测到环境变量中的API密钥")
+    else:
+        print(f"[DEBUG] 未检测到环境变量中的API密钥，将尝试从配置文件加载")
+    
+    # 如果环境变量中有API密钥，优先使用环境变量
+    if has_env_api_keys:
+        print("从环境变量加载配置")
+        config = Config(
+            deepseek_api_key=os.getenv("DEEPSEEK_API_KEY"),
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            qwen_api_key=os.getenv("QWEN_API_KEY"),
+            tavily_api_key=os.getenv("TAVILY_API_KEY"),
+            aihehuo_api_key=os.getenv("AIHEHUO_API_KEY"),
+            aihehuo_api_base=os.getenv("AIHEHUO_API_BASE"),
+            default_llm_provider=os.getenv("DEFAULT_LLM_PROVIDER", "deepseek"),
+            deepseek_model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
+            openai_model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            qwen_model=os.getenv("QWEN_MODEL", "qwen-turbo"),
+            max_search_results=int(os.getenv("MAX_SEARCH_RESULTS", os.getenv("SEARCH_RESULTS_PER_QUERY", "3"))),
+            search_timeout=int(os.getenv("SEARCH_TIMEOUT", "240")),
+            max_content_length=int(os.getenv("MAX_CONTENT_LENGTH", os.getenv("SEARCH_CONTENT_MAX_LENGTH", "20000"))),
+            max_reflections=int(os.getenv("MAX_REFLECTIONS", "2")),
+            max_paragraphs=int(os.getenv("MAX_PARAGRAPHS", "5")),
+            output_dir=os.getenv("OUTPUT_DIR", "reports"),
+            save_intermediate_states=os.getenv("SAVE_INTERMEDIATE_STATES", "true").lower() == "true"
+        )
+    else:
+        # 从配置文件加载
+        if config_file:
+            if not os.path.exists(config_file):
+                raise FileNotFoundError(f"配置文件不存在: {config_file}")
+            file_to_load = config_file
+        else:
+            # 尝试加载常见的配置文件
+            for config_path in ["config.py", "config.env", ".env"]:
+                if os.path.exists(config_path):
+                    file_to_load = config_path
+                    print(f"已找到配置文件: {config_path}")
+                    break
+            else:
+                raise FileNotFoundError("未找到配置文件，请创建 config.py 文件或设置环境变量（DEEPSEEK_API_KEY, OPENAI_API_KEY, QWEN_API_KEY, TAVILY_API_KEY等）")
+        
+        # 创建配置对象
+        config = Config.from_file(file_to_load)
+        
+        # 环境变量覆盖配置文件中的值（允许部分配置通过环境变量覆盖）
+        if os.getenv("DEEPSEEK_API_KEY"):
+            config.deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
+        if os.getenv("OPENAI_API_KEY"):
+            config.openai_api_key = os.getenv("OPENAI_API_KEY")
+        if os.getenv("QWEN_API_KEY"):
+            config.qwen_api_key = os.getenv("QWEN_API_KEY")
+        if os.getenv("TAVILY_API_KEY"):
+            config.tavily_api_key = os.getenv("TAVILY_API_KEY")
+        if os.getenv("AIHEHUO_API_KEY"):
+            config.aihehuo_api_key = os.getenv("AIHEHUO_API_KEY")
+        if os.getenv("AIHEHUO_API_BASE"):
+            config.aihehuo_api_base = os.getenv("AIHEHUO_API_BASE")
+        if os.getenv("DEFAULT_LLM_PROVIDER"):
+            config.default_llm_provider = os.getenv("DEFAULT_LLM_PROVIDER")
+        if os.getenv("OUTPUT_DIR"):
+            config.output_dir = os.getenv("OUTPUT_DIR")
     
     # 验证配置
     if not config.validate():
-        raise ValueError("配置验证失败，请检查配置文件中的API密钥")
+        raise ValueError("配置验证失败，请检查配置文件中的API密钥或环境变量")
     
     return config
 

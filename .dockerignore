@@ -1,0 +1,72 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+
+# Distribution
+dist/
+build/
+*.egg-info/
+
+# Environment variables (will be passed via docker-compose or -e)
+.env
+.env.local
+
+# Reports and outputs (will be mounted as volume)
+reports/
+custom_reports/
+/tmp/bp_agent_sessions/
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+*.md
+!README.md
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Examples (optional - include if needed)
+# examples/
+
+# Tests (optional - include if needed)
+# tests/
+
+# Images
+img/
+
+# Logs
+*.log
+logs/
+
+# macOS
+.DS_Store
+
+# Other
+*.txt
+!requirements.txt
+config.py
+
