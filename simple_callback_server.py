@@ -112,7 +112,19 @@ class CallbackHandler(BaseHTTPRequestHandler):
 def main():
     """Main function"""
     parser = argparse.ArgumentParser(
-        description="Simple callback server for testing async BP generation API"
+        description="Simple callback server for testing async BP generation API",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Start server on localhost (default)
+  python simple_callback_server.py
+  
+  # Start server accessible from Docker containers
+  python simple_callback_server.py --host 0.0.0.0 --port 8888
+  
+  # For Docker Desktop (Mac/Windows), use host.docker.internal as callback URL
+  # For Linux, use your host machine's IP address
+        """
     )
     parser.add_argument(
         "--port",
@@ -123,10 +135,20 @@ def main():
     parser.add_argument(
         "--host",
         default="localhost",
-        help="Host to bind to (default: localhost)"
+        help="Host to bind to (default: localhost). Use 0.0.0.0 for Docker compatibility"
+    )
+    parser.add_argument(
+        "--docker",
+        action="store_true",
+        help="Enable Docker mode: bind to 0.0.0.0 and show Docker-accessible URL"
     )
     
     args = parser.parse_args()
+    
+    # Override host if Docker mode is enabled
+    if args.docker:
+        args.host = "0.0.0.0"
+        print("🐳 Docker mode enabled - binding to 0.0.0.0")
     
     server_address = (args.host, args.port)
     httpd = HTTPServer(server_address, CallbackHandler)
@@ -136,7 +158,28 @@ def main():
     print("=" * 70)
     print(f"Listening on: http://{args.host}:{args.port}")
     print(f"\nUse this URL as your callback_url:")
-    print(f"  http://{args.host}:{args.port}")
+    
+    if args.docker or args.host == "0.0.0.0":
+        import platform
+        import socket
+        # Try to detect the host IP for Docker
+        if platform.system() in ['Darwin', 'Windows']:
+            docker_url = f"http://host.docker.internal:{args.port}"
+        else:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.connect(('8.8.8.8', 80))
+                host_ip = s.getsockname()[0]
+                s.close()
+                docker_url = f"http://{host_ip}:{args.port}"
+            except:
+                docker_url = f"http://<your-host-ip>:{args.port}"
+        
+        print(f"  For local access: http://localhost:{args.port}")
+        print(f"  For Docker containers: {docker_url}")
+    else:
+        print(f"  http://{args.host}:{args.port}")
+    
     print("\nWaiting for callbacks...")
     print("(Press Ctrl+C to stop)")
     print("=" * 70)

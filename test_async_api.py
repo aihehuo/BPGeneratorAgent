@@ -14,6 +14,8 @@ import requests
 import json
 import threading
 import time
+import socket
+import platform
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 import sys
@@ -62,10 +64,70 @@ class CallbackHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Callback server is running")
 
 
-def start_callback_server(port=8888):
-    """Start a simple callback server"""
-    server = HTTPServer(('localhost', port), CallbackHandler)
-    print(f"✅ Callback server started on http://localhost:{port}")
+def get_host_ip_for_docker():
+    """
+    Get the host IP address that Docker containers can reach.
+    
+    Returns:
+        str: Host IP address or special hostname for Docker
+    """
+    # On Docker Desktop (Mac/Windows), use host.docker.internal
+    if platform.system() in ['Darwin', 'Windows']:
+        return 'host.docker.internal'
+    
+    # On Linux, try to get the host IP from Docker bridge
+    # First try to get the default gateway (Docker bridge)
+    try:
+        import subprocess
+        result = subprocess.run(
+            ['ip', 'route', 'show', 'default'],
+            capture_output=True,
+            text=True,
+            timeout=2
+        )
+        if result.returncode == 0:
+            # Extract IP from route output
+            for line in result.stdout.split('\n'):
+                if 'default via' in line:
+                    parts = line.split()
+                    if 'via' in parts:
+                        idx = parts.index('via')
+                        if idx + 1 < len(parts):
+                            return parts[idx + 1]
+    except Exception:
+        pass
+    
+    # Fallback: try to get local IP address
+    try:
+        # Connect to a remote address to determine local IP
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+        return local_ip
+    except Exception:
+        pass
+    
+    # Last resort: return localhost (may not work from Docker)
+    return 'localhost'
+
+
+def start_callback_server(port=8888, bind_all=False):
+    """
+    Start a simple callback server
+    
+    Args:
+        port: Port to listen on
+        bind_all: If True, bind to 0.0.0.0 (accessible from Docker), 
+                  otherwise bind to localhost only
+    """
+    host = '0.0.0.0' if bind_all else 'localhost'
+    server = HTTPServer((host, port), CallbackHandler)
+    
+    display_host = 'localhost' if not bind_all else get_host_ip_for_docker()
+    print(f"✅ Callback server started on http://{display_host}:{port}")
+    if bind_all:
+        print(f"   (Bound to 0.0.0.0:{port} - accessible from Docker containers)")
     
     def run_server():
         server.serve_forever()
@@ -162,7 +224,24 @@ def main():
     """Main function"""
     import argparse
     
-    parser = argparse.ArgumentParser(description="Test async BP generation API")
+    parser = argparse.ArgumentParser(
+        description="Test async BP generation API",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Test against local API server
+  python test_async_api.py
+  
+  # Test against Docker container (auto-detect host IP)
+  python test_async_api.py --api-url http://localhost:8000 --docker
+  
+  # Test with custom callback URL
+  python test_async_api.py --callback-url http://your-server.com/webhook
+  
+  # Test with explicit host IP for Docker
+  python test_async_api.py --api-url http://localhost:8000 --docker-host 192.168.1.100
+        """
+    )
     parser.add_argument(
         "--api-url",
         default="http://localhost:8000",
@@ -183,8 +262,20 @@ def main():
         default="一个基于AI的在线教育平台，主要面向K12学生，提供个性化学习路径推荐",
         help="Business idea to test"
     )
+    parser.add_argument(
+        "--docker",
+        action="store_true",
+        help="Enable Docker mode: bind callback server to 0.0.0.0 and use host IP for callback URL"
+    )
+    parser.add_argument(
+        "--docker-host",
+        help="Explicit host IP/hostname for Docker containers to reach callback server (e.g., host.docker.internal or 192.168.1.100)"
+    )
     
     args = parser.parse_args()
+    
+    # Determine if we should use Docker mode
+    use_docker = args.docker or args.docker_host is not None
     
     # Setup callback URL
     if args.callback_url:
@@ -193,9 +284,25 @@ def main():
     else:
         # Start local callback server
         callback_port = args.callback_port
+        
+        # Determine callback host
+        if use_docker:
+            if args.docker_host:
+                callback_host = args.docker_host
+            else:
+                callback_host = get_host_ip_for_docker()
+            bind_all = True
+            print(f"🐳 Docker mode enabled")
+            print(f"   Detected host IP/hostname: {callback_host}")
+        else:
+            callback_host = 'localhost'
+            bind_all = False
+        
         try:
-            server, thread = start_callback_server(callback_port)
-            callback_url = f"http://localhost:{callback_port}"
+            server, thread = start_callback_server(callback_port, bind_all=bind_all)
+            callback_url = f"http://{callback_host}:{callback_port}"
+            if use_docker:
+                print(f"   Callback URL for Docker: {callback_url}")
             time.sleep(0.5)  # Give server time to start
         except OSError as e:
             print(f"❌ Could not start callback server on port {callback_port}: {e}")
