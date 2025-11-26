@@ -8,7 +8,7 @@ set -e
 # Configuration
 REGISTRY="crpi-lp1jelcmhkef5y0u.cn-qingdao.personal.cr.aliyuncs.com"
 IMAGE_NAME="aihehuo/bp-generation-api"
-TAG="0.0.1"  # Add tokenizer endpoint
+TAG="0.0.2"  # Add tokenizer endpoint
 USERNAME="yc@foundertime.com"
 
 # Check if ALIYUN_DOCKER_PASSWORD is set
