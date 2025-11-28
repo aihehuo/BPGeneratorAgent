@@ -37,6 +37,7 @@ echo "🚀 Deploying BP Generation API to $REMOTE_USER@$REMOTE_HOST"
 echo "📦 Image: $FULL_IMAGE"
 echo "📁 Remote directory: $REMOTE_DIR"
 echo "🌐 Port: $PORT"
+echo "🔗 Host access: host.docker.internal (enabled for callback support)"
 echo ""
 
 # Create remote directory structure
@@ -93,12 +94,48 @@ cat > "\$ENV_FILE_TMP" <<ENVEOF
 $(echo -n "$DOCKER_ENV_FILE_CONTENT")
 ENVEOF
 
+# Detect host gateway IP for host.docker.internal
+# We want the Docker bridge gateway IP (docker0), NOT the system default gateway
+# The Docker bridge IP (172.17.0.1) is what containers use to reach the host
+HOST_GATEWAY_IP="172.17.0.1"  # Default Docker bridge IP
+
+if command -v ip >/dev/null 2>&1; then
+    # First, try to get the Docker bridge interface IP (docker0)
+    DOCKER_BRIDGE_IP=\$(ip addr show docker0 2>/dev/null | grep 'inet ' | awk '{print \$2}' | cut -d/ -f1)
+    if [ -n "\$DOCKER_BRIDGE_IP" ]; then
+        HOST_GATEWAY_IP="\$DOCKER_BRIDGE_IP"
+        echo "🔗 Docker bridge IP detected: \$HOST_GATEWAY_IP (from docker0 interface)"
+    else
+        # Fallback: try to get from docker0 route (the 'src' field)
+        DOCKER_ROUTE=\$(ip route show | grep '172.17.0.0/16.*docker0' | awk '{for(i=1;i<=NF;i++) if(\$i=="src") print \$(i+1)}')
+        if [ -n "\$DOCKER_ROUTE" ]; then
+            HOST_GATEWAY_IP="\$DOCKER_ROUTE"
+            echo "🔗 Docker bridge IP detected: \$HOST_GATEWAY_IP (from route)"
+        else
+            # Use default Docker bridge IP
+            HOST_GATEWAY_IP="172.17.0.1"
+            echo "🔗 Using default Docker bridge IP: \$HOST_GATEWAY_IP"
+        fi
+    fi
+elif [ -f /proc/net/route ]; then
+    # Check if docker0 exists
+    if [ -f /sys/class/net/docker0/address ]; then
+        HOST_GATEWAY_IP="172.17.0.1"
+        echo "🔗 Using default Docker bridge IP: \$HOST_GATEWAY_IP (docker0 interface exists)"
+    else
+        HOST_GATEWAY_IP="172.17.0.1"
+        echo "⚠️  Warning: docker0 not found, using default: \$HOST_GATEWAY_IP"
+    fi
+fi
+
+echo "🔗 Host gateway IP for host.docker.internal: \$HOST_GATEWAY_IP"
 echo "🚀 Starting container: \$CONTAINER_NAME"
 docker run -d \\
     --name "\$CONTAINER_NAME" \\
     -p "\$PORT:8000" \\
     -v "\$REMOTE_DIR/reports:/app/reports" \\
     -v "\$REMOTE_DIR/sessions:/tmp/bp_agent_sessions" \\
+    --add-host=host.docker.internal:\$HOST_GATEWAY_IP \\
     --env-file "\$ENV_FILE_TMP" \\
     --restart unless-stopped \\
     "\$FULL_IMAGE"

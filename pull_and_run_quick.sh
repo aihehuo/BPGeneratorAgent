@@ -43,6 +43,18 @@ if [ -f ".docker.env" ]; then
     done < ".docker.env"
 fi
 
+# Detect host gateway IP for host.docker.internal
+# We want the Docker bridge gateway IP (docker0), not the system default gateway
+HOST_GATEWAY_IP="172.17.0.1"  # Default Docker bridge IP
+
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    HOST_GATEWAY_IP="host-gateway"
+elif command -v ip >/dev/null 2>&1; then
+    # Try to get Docker bridge IP from docker0 interface
+    DOCKER_BRIDGE_IP=$(ip addr show docker0 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1)
+    [ -n "$DOCKER_BRIDGE_IP" ] && HOST_GATEWAY_IP="$DOCKER_BRIDGE_IP"
+fi
+
 # Run container
 echo "🚀 Starting container..."
 docker run -d \
@@ -50,6 +62,7 @@ docker run -d \
     -p "$PORT:8000" \
     -v "$(pwd)/$OUTPUT_DIR:/app/reports" \
     -v "$(pwd)/$SESSIONS_DIR:/tmp/bp_agent_sessions" \
+    --add-host=host.docker.internal:$HOST_GATEWAY_IP \
     "${ENV_ARGS[@]}" \
     --restart unless-stopped \
     "$FULL_IMAGE"

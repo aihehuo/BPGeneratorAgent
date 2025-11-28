@@ -74,12 +74,51 @@ done < "$ENV_FILE"
 # Override OUTPUT_DIR in container
 ENV_ARGS+=("-e" "OUTPUT_DIR=/app/reports")
 
+# Detect host gateway IP for host.docker.internal
+# We want the Docker bridge gateway IP, not the system default gateway
+HOST_GATEWAY_IP="172.17.0.1"  # Default Docker bridge IP
+
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS: Docker Desktop supports host-gateway in docker run
+    # But we'll use the IP approach for consistency
+    HOST_GATEWAY_IP="host-gateway"
+    echo "🔗 macOS detected, using host-gateway"
+elif command -v ip >/dev/null 2>&1; then
+    # First, try to get the Docker bridge interface IP (docker0)
+    DOCKER_BRIDGE_IP=$(ip addr show docker0 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1)
+    if [ -n "$DOCKER_BRIDGE_IP" ]; then
+        HOST_GATEWAY_IP="$DOCKER_BRIDGE_IP"
+        echo "🔗 Docker bridge IP detected: $HOST_GATEWAY_IP (from docker0 interface)"
+    else
+        # Fallback: try to get from docker0 route
+        DOCKER_ROUTE=$(ip route show | grep '172.17.0.0/16.*docker0' | awk '{print $9}')
+        if [ -n "$DOCKER_ROUTE" ]; then
+            HOST_GATEWAY_IP="$DOCKER_ROUTE"
+            echo "🔗 Docker bridge IP detected: $HOST_GATEWAY_IP (from route)"
+        else
+            # Use default Docker bridge IP
+            HOST_GATEWAY_IP="172.17.0.1"
+            echo "🔗 Using default Docker bridge IP: $HOST_GATEWAY_IP"
+        fi
+    fi
+elif [ -f /proc/net/route ]; then
+    # Check if docker0 exists
+    if [ -f /sys/class/net/docker0/address ]; then
+        HOST_GATEWAY_IP="172.17.0.1"
+        echo "🔗 Using default Docker bridge IP: $HOST_GATEWAY_IP (docker0 exists)"
+    else
+        HOST_GATEWAY_IP="172.17.0.1"
+        echo "⚠️  Warning: docker0 not found, using default: $HOST_GATEWAY_IP"
+    fi
+fi
+
 # Run the container
 echo "🚀 Starting container: $CONTAINER_NAME"
 echo "📦 Image: $FULL_IMAGE"
 echo "🌐 Port: $PORT"
 echo "📁 Reports: $OUTPUT_DIR"
 echo "📁 Sessions: $SESSIONS_DIR"
+echo "🔗 Host gateway IP: $HOST_GATEWAY_IP"
 echo ""
 
 docker run -d \
@@ -87,6 +126,7 @@ docker run -d \
     -p "$PORT:8000" \
     -v "$(pwd)/$OUTPUT_DIR:/app/reports" \
     -v "$(pwd)/$SESSIONS_DIR:/tmp/bp_agent_sessions" \
+    --add-host=host.docker.internal:$HOST_GATEWAY_IP \
     "${ENV_ARGS[@]}" \
     --restart unless-stopped \
     "$FULL_IMAGE"

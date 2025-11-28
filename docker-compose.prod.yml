@@ -13,6 +13,9 @@ services:
     volumes:
       - ./reports:/app/reports
       - ./sessions:/tmp/bp_agent_sessions
+    extra_hosts:
+      # Enable host.docker.internal for callback support (Linux compatibility)
+      - "host.docker.internal:host-gateway"
     restart: always
     healthcheck:
       test: ["CMD", "python", "-c", "import http.client; conn = http.client.HTTPConnection('localhost', 8000); conn.request('GET', '/health'); r = conn.getresponse(); exit(0 if r.status == 200 else 1)"]
