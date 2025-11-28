@@ -115,7 +115,7 @@ def bp_generation_simple_example():
         
         if bp_structure:
             print(f"报告段落数: {len(bp_structure)}")
-            print("\n生成的段落:")
+        print("\n生成的段落:")
             for i, section in enumerate(bp_structure, 1):
                 print(f"  {i}. {section.get('title', 'N/A')}")
         

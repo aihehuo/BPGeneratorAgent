@@ -725,8 +725,8 @@ def main():
             print("\n正在初始化BP Generation Agent (LangGraph版本)...")
             agent = None  # We'll use graph directly
         else:
-            print("\n正在初始化BP Generation Agent...")
-            agent = BPGenerationAgent(config)
+        print("\n正在初始化BP Generation Agent...")
+        agent = BPGenerationAgent(config)
         
         # 处理Session ID
         session_id = args.session_id
@@ -790,7 +790,7 @@ def main():
             # Only show session_dir if it exists (filesystem implementation detail)
             session_dir = os.path.join(config.output_dir, session_id)
             if os.path.exists(session_dir):
-                print(f"Session目录: {session_dir}")
+            print(f"Session目录: {session_dir}")
         
         confirm = get_input("\n确认开始生成？", default="y").lower()
         if confirm not in ['y', 'yes', '是']:
@@ -812,11 +812,11 @@ def main():
             # Create agent instance for display_results helper methods
             agent = BPGenerationAgent(config)
         else:
-            result = agent.generate_bp(
-                business_idea=business_idea,
-                save_report=not args.no_save,
+        result = agent.generate_bp(
+            business_idea=business_idea,
+            save_report=not args.no_save,
                 session_id=session_id
-            )
+        )
         
         # 显示结果
         display_results(result, agent)

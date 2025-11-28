@@ -8,6 +8,7 @@ import sys
 import uuid
 import threading
 import httpx
+import re
 from typing import Optional, Dict, Any
 from datetime import datetime
 from urllib.parse import urljoin
@@ -580,6 +581,330 @@ def _build_artifact_urls(session_id: str, state: Dict[str, Any], base_url: str =
     return artifacts
 
 
+# Translation dictionary for status messages
+# Supported languages: en (English), zh (Simplified Chinese), zh-tw (Traditional Chinese), 
+# ja (Japanese), nl (Dutch), fr (French), de (German), es (Spanish), it (Italian), ru (Russian)
+_STATUS_TRANSLATIONS: Dict[str, Dict[str, str]] = {
+    "started": {
+        "en": "BP generation started",
+        "zh": "商业计划书生成已开始",
+        "zh-tw": "商業計劃書生成已開始",
+        "ja": "ビジネスプラン生成を開始しました",
+        "nl": "BP-generatie gestart",
+        "fr": "Génération du plan d'affaires démarrée",
+        "de": "BP-Generierung gestartet",
+        "es": "Generación del plan de negocio iniciada",
+        "it": "Generazione del piano aziendale avviata",
+        "ru": "Генерация бизнес-плана начата"
+    },
+    "input_check": {
+        "en": "Checking input completeness...",
+        "zh": "正在检查输入完整性...",
+        "zh-tw": "正在檢查輸入完整性...",
+        "ja": "入力の完全性を確認中...",
+        "nl": "Invoer volledigheid controleren...",
+        "fr": "Vérification de l'exhaustivité de la saisie...",
+        "de": "Eingabevollständigkeit prüfen...",
+        "es": "Verificando la integridad de la entrada...",
+        "it": "Verifica della completezza dell'input...",
+        "ru": "Проверка полноты ввода..."
+    },
+    "structure_generation": {
+        "en": "Generating BP structure...",
+        "zh": "正在生成商业计划书结构...",
+        "zh-tw": "正在生成商業計劃書結構...",
+        "ja": "ビジネスプラン構造を生成中...",
+        "nl": "BP-structuur genereren...",
+        "fr": "Génération de la structure du plan d'affaires...",
+        "de": "BP-Struktur generieren...",
+        "es": "Generando la estructura del plan de negocio...",
+        "it": "Generazione della struttura del piano aziendale...",
+        "ru": "Генерация структуры бизнес-плана..."
+    },
+    "structure_regeneration": {
+        "en": "Regenerating BP structure...",
+        "zh": "正在重新生成商业计划书结构...",
+        "zh-tw": "正在重新生成商業計劃書結構...",
+        "ja": "ビジネスプラン構造を再生成中...",
+        "nl": "BP-structuur opnieuw genereren...",
+        "fr": "Régénération de la structure du plan d'affaires...",
+        "de": "BP-Struktur erneut generieren...",
+        "es": "Regenerando la estructura del plan de negocio...",
+        "it": "Rigenerazione della struttura del piano aziendale...",
+        "ru": "Повторная генерация структуры бизнес-плана..."
+    },
+    "structure_evaluation": {
+        "en": "Evaluating BP structure...",
+        "zh": "正在评估商业计划书结构...",
+        "zh-tw": "正在評估商業計劃書結構...",
+        "ja": "ビジネスプラン構造を評価中...",
+        "nl": "BP-structuur evalueren...",
+        "fr": "Évaluation de la structure du plan d'affaires...",
+        "de": "BP-Struktur bewerten...",
+        "es": "Evaluando la estructura del plan de negocio...",
+        "it": "Valutazione della struttura del piano aziendale...",
+        "ru": "Оценка структуры бизнес-плана..."
+    },
+    "painpoint_enhancement": {
+        "en": "Enhancing pain points...",
+        "zh": "正在优化痛点分析...",
+        "zh-tw": "正在優化痛點分析...",
+        "ja": "ペインポイントを強化中...",
+        "nl": "Pijnpunten verbeteren...",
+        "fr": "Amélioration des points de douleur...",
+        "de": "Schmerzpunkte verbessern...",
+        "es": "Mejorando los puntos de dolor...",
+        "it": "Miglioramento dei punti critici...",
+        "ru": "Улучшение болевых точек..."
+    },
+    "investor_evaluation": {
+        "en": "Evaluating investor perspective...",
+        "zh": "正在评估投资者视角...",
+        "zh-tw": "正在評估投資者視角...",
+        "ja": "投資家の視点を評価中...",
+        "nl": "Investeerderperspectief evalueren...",
+        "fr": "Évaluation de la perspective des investisseurs...",
+        "de": "Investorenperspektive bewerten...",
+        "es": "Evaluando la perspectiva del inversor...",
+        "it": "Valutazione della prospettiva dell'investitore...",
+        "ru": "Оценка перспективы инвестора..."
+    },
+    "pitch_generation": {
+        "en": "Generating 60-second pitch...",
+        "zh": "正在生成60秒路演...",
+        "zh-tw": "正在生成60秒路演...",
+        "ja": "60秒ピッチを生成中...",
+        "nl": "60-seconden pitch genereren...",
+        "fr": "Génération du pitch de 60 secondes...",
+        "de": "60-Sekunden-Pitch generieren...",
+        "es": "Generando el pitch de 60 segundos...",
+        "it": "Generazione del pitch di 60 secondi...",
+        "ru": "Генерация 60-секундной презентации..."
+    },
+    "ppt_generation": {
+        "en": "Generating PPT design...",
+        "zh": "正在生成PPT设计...",
+        "zh-tw": "正在生成PPT設計...",
+        "ja": "PPTデザインを生成中...",
+        "nl": "PPT-ontwerp genereren...",
+        "fr": "Génération de la conception PPT...",
+        "de": "PPT-Design generieren...",
+        "es": "Generando el diseño de la presentación...",
+        "it": "Generazione del design della presentazione...",
+        "ru": "Генерация дизайна презентации..."
+    },
+    "partner_search": {
+        "en": "Searching for partners...",
+        "zh": "正在搜索合作伙伴...",
+        "zh-tw": "正在搜尋合作夥伴...",
+        "ja": "パートナーを検索中...",
+        "nl": "Zoeken naar partners...",
+        "fr": "Recherche de partenaires...",
+        "de": "Suche nach Partnern...",
+        "es": "Buscando socios...",
+        "it": "Ricerca di partner...",
+        "ru": "Поиск партнеров..."
+    },
+    "completed": {
+        "en": "BP generation completed successfully",
+        "zh": "商业计划书生成成功",
+        "zh-tw": "商業計劃書生成成功",
+        "ja": "ビジネスプラン生成が正常に完了しました",
+        "nl": "BP-generatie succesvol voltooid",
+        "fr": "Génération du plan d'affaires terminée avec succès",
+        "de": "BP-Generierung erfolgreich abgeschlossen",
+        "es": "Generación del plan de negocio completada con éxito",
+        "it": "Generazione del piano aziendale completata con successo",
+        "ru": "Генерация бизнес-плана успешно завершена"
+    },
+    "input_check_failed": {
+        "en": "Input completeness check failed",
+        "zh": "输入完整性检查失败",
+        "zh-tw": "輸入完整性檢查失敗",
+        "ja": "入力完全性チェックに失敗しました",
+        "nl": "Invoer volledigheid controle mislukt",
+        "fr": "Échec de la vérification de l'exhaustivité de la saisie",
+        "de": "Eingabevollständigkeitsprüfung fehlgeschlagen",
+        "es": "Verificación de la integridad de la entrada fallida",
+        "it": "Verifica della completezza dell'input fallita",
+        "ru": "Проверка полноты ввода не прошла"
+    },
+    "generation_failed": {
+        "en": "BP generation failed",
+        "zh": "商业计划书生成失败",
+        "zh-tw": "商業計劃書生成失敗",
+        "ja": "ビジネスプラン生成に失敗しました",
+        "nl": "BP-generatie mislukt",
+        "fr": "Échec de la génération du plan d'affaires",
+        "de": "BP-Generierung fehlgeschlagen",
+        "es": "Generación del plan de negocio fallida",
+        "it": "Generazione del piano aziendale fallita",
+        "ru": "Генерация бизнес-плана не удалась"
+    },
+    "async_started": {
+        "en": "BP generation started. Status updates will be sent to the callback URL.",
+        "zh": "商业计划书生成已开始。状态更新将发送到回调URL。",
+        "zh-tw": "商業計劃書生成已開始。狀態更新將發送到回調URL。",
+        "ja": "ビジネスプラン生成を開始しました。ステータス更新はコールバックURLに送信されます。",
+        "nl": "BP-generatie gestart. Statusupdates worden naar de callback-URL verzonden.",
+        "fr": "Génération du plan d'affaires démarrée. Les mises à jour de statut seront envoyées à l'URL de rappel.",
+        "de": "BP-Generierung gestartet. Statusaktualisierungen werden an die Callback-URL gesendet.",
+        "es": "Generación del plan de negocio iniciada. Las actualizaciones de estado se enviarán a la URL de callback.",
+        "it": "Generazione del piano aziendale avviata. Gli aggiornamenti di stato verranno inviati all'URL di callback.",
+        "ru": "Генерация бизнес-плана начата. Обновления статуса будут отправлены на URL обратного вызова."
+    }
+}
+
+
+def _detect_language(text: str) -> str:
+    """
+    Detect language from text. Returns language code: 'en', 'zh' (Simplified), 'zh-tw' (Traditional), 
+    'ja', 'nl', 'fr', 'de', 'es', 'it', 'ru', or 'en' as default.
+    
+    Args:
+        text: Input text to detect language from
+        
+    Returns:
+        Language code: 'en', 'zh', 'zh-tw', 'ja', 'nl', 'fr', 'de', 'es', 'it', 'ru'
+    """
+    if not text or not text.strip():
+        return 'en'
+    
+    text = text.strip()
+    
+    # Chinese characters: \u4e00-\u9fff
+    chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
+    
+    # Japanese characters: Hiragana \u3040-\u309f, Katakana \u30a0-\u30ff, Kanji overlaps with Chinese
+    # For Japanese, we look for hiragana/katakana which are unique to Japanese
+    hiragana_chars = len(re.findall(r'[\u3040-\u309f]', text))
+    katakana_chars = len(re.findall(r'[\u30a0-\u30ff]', text))
+    japanese_chars = hiragana_chars + katakana_chars
+    
+    # Russian characters: Cyrillic \u0400-\u04ff
+    russian_chars = len(re.findall(r'[\u0400-\u04ff]', text))
+    
+    # Count total characters for ratios
+    total_chars = len(re.findall(r'[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\u0400-\u04ff\w]', text))
+    
+    if total_chars == 0:
+        return 'en'
+    
+    # Prioritize detection order: Japanese (has unique characters) > Russian (Cyrillic) > Chinese > European languages > English
+    if japanese_chars > 0:
+        return 'ja'
+    
+    # Russian detection (Cyrillic script)
+    russian_ratio = russian_chars / total_chars if total_chars > 0 else 0
+    if russian_ratio > 0.3:
+        return 'ru'
+    
+    chinese_ratio = chinese_chars / total_chars if total_chars > 0 else 0
+    if chinese_ratio > 0.3:
+        # Distinguish between Simplified and Traditional Chinese
+        traditional_patterns = [
+            '繁體', '系統', '資訊', '網路', '數據', '企業', '產品', '專業', '應用',
+            '計畫', '評估', '設計', '優化', '搜尋', '檢查', '輸入', '開始', '失敗',
+            '商業', '投資', '合作', '夥伴', '狀態', '更新', '回調', '成功'
+        ]
+        traditional_score = sum(1 for pattern in traditional_patterns if pattern in text)
+        
+        simplified_patterns = [
+            '简体', '系统', '信息', '网络', '数据', '企业', '产品', '专业', '应用',
+            '计划', '评估', '设计', '优化', '搜索', '检查', '输入', '开始', '失败',
+            '商业', '投资', '合作', '伙伴', '状态', '更新', '回调', '成功'
+        ]
+        simplified_score = sum(1 for pattern in simplified_patterns if pattern in text)
+        
+        if traditional_score > simplified_score:
+            return 'zh-tw'
+        return 'zh'
+    
+    # European languages: Use common words and patterns
+    # German common words
+    german_patterns = [
+        r'\bder\b', r'\bdie\b', r'\bdas\b', r'\bund\b', r'\bin\b', r'\bist\b', r'\bzur\b',
+        r'\bfür\b', r'\bmit\b', r'\bvon\b', r'\bauf\b', r'\bzu\b', r'\bden\b', r'\bdes\b',
+        r'\bwerden\b', r'\bsind\b', r'\bhaben\b', r'\bsein\b'
+    ]
+    german_score = sum(1 for pattern in german_patterns if re.search(pattern, text, re.IGNORECASE))
+    
+    # Spanish common words
+    spanish_patterns = [
+        r'\bel\b', r'\bla\b', r'\blos\b', r'\blas\b', r'\bde\b', r'\bque\b', r'\by\b',
+        r'\ba\b', r'\ben\b', r'\bun\b', r'\buna\b', r'\bes\b', r'\bcon\b', r'\bpor\b',
+        r'\bpara\b', r'\bser\b', r'\bhaber\b', r'\bestar\b'
+    ]
+    spanish_score = sum(1 for pattern in spanish_patterns if re.search(pattern, text, re.IGNORECASE))
+    
+    # Italian common words
+    italian_patterns = [
+        r'\bil\b', r'\bla\b', r'\blo\b', r'\bli\b', r'\ble\b', r'\bdi\b', r'\bche\b',
+        r'\be\b', r'\ba\b', r'\bin\b', r'\bun\b', r'\buna\b', r'\bè\b', r'\bcon\b',
+        r'\bper\b', r'\bessere\b', r'\bavere\b', r'\bfare\b'
+    ]
+    italian_score = sum(1 for pattern in italian_patterns if re.search(pattern, text, re.IGNORECASE))
+    
+    # French common words
+    french_patterns = [
+        r'\ble\b', r'\bla\b', r'\bles\b', r'\bde\b', r'\bet\b', r'\bun\b', r'\bune\b',
+        r'\bdans\b', r'\bqui\b', r'\bque\b', r'\bà\b', r'\bavec\b', r'\bêtre\b', r'\bavoir\b'
+    ]
+    french_score = sum(1 for pattern in french_patterns if re.search(pattern, text, re.IGNORECASE))
+    
+    # Dutch common words
+    dutch_patterns = [
+        r'\bde\b', r'\bhet\b', r'\ben\b', r'\bvan\b', r'\bin\b', r'\bis\b', r'\bdat\b',
+        r'\bop\b', r'\bvoor\b', r'\bmet\b', r'\bte\b', r'\bzijn\b', r'\bhebben\b', r'\bier\b'
+    ]
+    dutch_score = sum(1 for pattern in dutch_patterns if re.search(pattern, text, re.IGNORECASE))
+    
+    # Find the language with the highest score (minimum threshold of 3)
+    lang_scores = {
+        'de': german_score,
+        'es': spanish_score,
+        'it': italian_score,
+        'fr': french_score,
+        'nl': dutch_score
+    }
+    
+    max_score_lang = max(lang_scores.items(), key=lambda x: x[1])
+    if max_score_lang[1] >= 3:
+        return max_score_lang[0]
+    
+    # Default to English
+    return 'en'
+
+
+def _translate_status_message(user_input: str, english_message_key: str) -> str:
+    """
+    Get translated status message based on user's input language.
+    
+    Args:
+        user_input: User's business idea (to detect language)
+        english_message_key: Key for the message in _STATUS_TRANSLATIONS dict
+        
+    Returns:
+        Translated message in the user's language, or English if not found
+    """
+    # Detect language
+    lang = _detect_language(user_input)
+    
+    # Get translation, with fallback chain: detected_lang -> zh (if zh-tw not available) -> en
+    translations = _STATUS_TRANSLATIONS.get(english_message_key, {})
+    
+    # Try detected language first
+    if lang in translations:
+        return translations[lang]
+    
+    # If zh-tw is detected but not available, fallback to zh
+    if lang == 'zh-tw' and 'zh' in translations:
+        return translations['zh']
+    
+    # Final fallback to English
+    return translations.get("en", english_message_key)
+
+
 def _run_async_generation(
     agent: BPGenerationAgent,
     business_idea: str,
@@ -602,8 +927,9 @@ def _run_async_generation(
         base_url: Base URL for artifact URLs
     """
     try:
-        # Send started callback
-        _send_callback(callback_url, session_id, "started", "BP generation started")
+        # Translate initial status message
+        started_message = _translate_status_message(business_idea, "started")
+        _send_callback(callback_url, session_id, "started", started_message)
         
         # Get the graph and chat history manager
         from src.graph.workflow import create_bp_graph
@@ -658,18 +984,9 @@ def _run_async_generation(
                     }
                     
                     status = status_map.get(node_name, node_name)
-                    message_map = {
-                        "input_check": "Checking input completeness...",
-                        "structure_generation": "Generating BP structure...",
-                        "structure_regeneration": "Regenerating BP structure...",
-                        "structure_evaluation": "Evaluating BP structure...",
-                        "painpoint_enhancement": "Enhancing pain points...",
-                        "investor_evaluation": "Evaluating investor perspective...",
-                        "pitch_generation": "Generating 60-second pitch...",
-                        "ppt_generation": "Generating PPT design...",
-                        "partner_search": "Searching for partners..."
-                    }
-                    message = message_map.get(status, f"Processing {node_name}...")
+                    
+                    # Translate message to match user's language using status key
+                    message = _translate_status_message(business_idea, status)
                     
                     # Build artifact URLs from current state (include intermediate artifacts)
                     artifacts = _build_artifact_urls(session_id, node_state, base_url, include_intermediate=True)
@@ -685,10 +1002,13 @@ def _run_async_generation(
         # Check for errors
         completeness = final_state.get("input_completeness", {})
         if completeness and not completeness.get("is_complete", False):
-            error_msg = "Input completeness check failed"
+            base_error_msg = _translate_status_message(business_idea, "input_check_failed")
             suggestions = completeness.get("suggestions", [])
             if suggestions:
-                error_msg += f": {', '.join(suggestions[:3])}"
+                # Append suggestions in the same language (keep original format)
+                error_msg = f"{base_error_msg}: {', '.join(suggestions[:3])}"
+            else:
+                error_msg = base_error_msg
             _send_callback(
                 callback_url, 
                 session_id, 
@@ -744,12 +1064,15 @@ def _run_async_generation(
         # Build final artifact URLs (only include files that are actually saved)
         final_artifacts = _build_artifact_urls(session_id, final_state, base_url, include_intermediate=False)
         
+        # Translate completion message
+        completed_message = _translate_status_message(business_idea, "completed")
+        
         # Send completion callback
         _send_callback(
             callback_url,
             session_id,
             "completed",
-            "BP generation completed successfully",
+            completed_message,
             artifacts=final_artifacts
         )
         
@@ -757,11 +1080,14 @@ def _run_async_generation(
         import traceback
         error_msg = str(e)
         error_trace = traceback.format_exc()
+        # Translate error message
+        base_error = _translate_status_message(business_idea, "generation_failed")
+        translated_error = f"{base_error}: {error_msg}"
         _send_callback(
             callback_url,
             session_id,
             "error",
-            f"BP generation failed: {error_msg}",
+            translated_error,
             error=error_trace
         )
 
@@ -821,9 +1147,16 @@ async def generate_bp_async(request: GenerateBPAsyncRequest, http_request: Reque
         )
         thread.start()
         
+        # Translate the initial response message to match user's language
+        initial_message = _translate_status_message(
+            agent.llm, 
+            request.business_idea, 
+            "BP generation started. Status updates will be sent to the callback URL."
+        )
+        
         return GenerateBPAsyncResponse(
             success=True,
-            message="BP generation started. Status updates will be sent to the callback URL.",
+            message=initial_message,
             session_id=session_id
         )
         

@@ -137,15 +137,17 @@ def start_callback_server(port=8888, bind_all=False):
     return server, thread
 
 
-def test_async_api(business_idea: str, callback_url: str, api_url: str = "http://localhost:8000"):
+def test_async_api(business_idea: str, callback_url: str, api_url: str = "http://localhost:8000", expected_lang: str = None, lang_code: str = None):
     """Test the async API endpoint"""
     
     print("=" * 60)
     print("Testing Async BP Generation API")
     print("=" * 60)
+    if expected_lang:
+        print(f"🌐 Language: {LANGUAGE_NAMES.get(expected_lang, expected_lang)} ({expected_lang})")
     print(f"API URL: {api_url}/api/v1/generate-async")
     print(f"Callback URL: {callback_url}")
-    print(f"Business Idea: {business_idea[:50]}...")
+    print(f"Business Idea: {business_idea[:80]}...")
     print()
     
     # Prepare request
@@ -220,26 +222,66 @@ def test_async_api(business_idea: str, callback_url: str, api_url: str = "http:/
         traceback.print_exc()
 
 
+# Predefined test business ideas in different languages
+TEST_BUSINESS_IDEAS = {
+    "en": "An AI-powered online education platform targeting K12 students, providing personalized learning path recommendations",
+    "zh": "一个基于AI的在线教育平台，主要面向K12学生，提供个性化学习路径推荐",
+    "zh-tw": "一個基於AI的線上教育平台，主要面向K12學生，提供個人化學習路徑推薦",
+    "ja": "K12の学生向けのAIを活用したオンライン教育プラットフォームで、個別化された学習パス推奨を提供",
+    "nl": "Een AI-aangedreven online onderwijsplatform voor K12-studenten, dat gepersonaliseerde leerpadaanbevelingen biedt",
+    "fr": "Une plateforme d'éducation en ligne alimentée par l'IA, ciblant les élèves K12, offrant des recommandations de parcours d'apprentissage personnalisées",
+    "de": "Eine KI-gestützte Online-Bildungsplattform für K12-Schüler, die personalisierte Lernpfadempfehlungen bietet",
+    "es": "Una plataforma educativa en línea impulsada por IA dirigida a estudiantes K12, que ofrece recomendaciones de rutas de aprendizaje personalizadas",
+    "it": "Una piattaforma educativa online alimentata dall'IA rivolta agli studenti K12, che offre raccomandazioni di percorsi di apprendimento personalizzati",
+    "ru": "Образовательная онлайн-платформа на базе ИИ для учащихся K12, предоставляющая персонализированные рекомендации по учебным путям"
+}
+
+# Expected language names for display
+LANGUAGE_NAMES = {
+    "en": "English",
+    "zh": "Simplified Chinese",
+    "zh-tw": "Traditional Chinese",
+    "ja": "Japanese",
+    "nl": "Dutch",
+    "fr": "French",
+    "de": "German",
+    "es": "Spanish",
+    "it": "Italian",
+    "ru": "Russian"
+}
+
+
 def main():
     """Main function"""
     import argparse
     
     parser = argparse.ArgumentParser(
-        description="Test async BP generation API",
+        description="Test async BP generation API with multi-language support",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+        epilog=f"""
 Examples:
-  # Test against local API server
+  # Test with English (default)
   python test_async_api.py
   
-  # Test against Docker container (auto-detect host IP)
-  python test_async_api.py --api-url http://localhost:8000 --docker
+  # Test with Chinese
+  python test_async_api.py --lang zh
   
-  # Test with custom callback URL
-  python test_async_api.py --callback-url http://your-server.com/webhook
+  # Test with Japanese
+  python test_async_api.py --lang ja
   
-  # Test with explicit host IP for Docker
-  python test_async_api.py --api-url http://localhost:8000 --docker-host 192.168.1.100
+  # Test with Traditional Chinese
+  python test_async_api.py --lang zh-tw
+  
+  # Test with German
+  python test_async_api.py --lang de
+  
+  # Test against Docker container
+  python test_async_api.py --lang fr --docker
+  
+  # Test with custom business idea
+  python test_async_api.py --business-idea "Your custom idea here" --lang es
+
+Supported languages: {', '.join(TEST_BUSINESS_IDEAS.keys())}
         """
     )
     parser.add_argument(
@@ -258,9 +300,14 @@ Examples:
         help="Custom callback URL (if not provided, will start local callback server)"
     )
     parser.add_argument(
+        "--lang",
+        choices=list(TEST_BUSINESS_IDEAS.keys()),
+        default="zh",
+        help=f"Language to test (default: zh). Available: {', '.join(TEST_BUSINESS_IDEAS.keys())}"
+    )
+    parser.add_argument(
         "--business-idea",
-        default="一个基于AI的在线教育平台，主要面向K12学生，提供个性化学习路径推荐",
-        help="Business idea to test"
+        help="Custom business idea to test (if not provided, uses predefined idea for selected language)"
     )
     parser.add_argument(
         "--docker",
@@ -273,6 +320,14 @@ Examples:
     )
     
     args = parser.parse_args()
+    
+    # Determine business idea
+    if args.business_idea:
+        business_idea = args.business_idea
+        detected_lang = None  # User provided custom idea, don't assume language
+    else:
+        business_idea = TEST_BUSINESS_IDEAS.get(args.lang, TEST_BUSINESS_IDEAS["zh"])
+        detected_lang = args.lang
     
     # Determine if we should use Docker mode
     use_docker = args.docker or args.docker_host is not None
@@ -311,22 +366,57 @@ Examples:
     
     # Test the async API
     test_async_api(
-        business_idea=args.business_idea,
+        business_idea=business_idea,
         callback_url=callback_url,
-        api_url=args.api_url
+        api_url=args.api_url,
+        expected_lang=detected_lang,
+        lang_code=args.lang if args.business_idea else detected_lang
     )
     
     # Print summary
+    print_summary(lang_code=args.lang if args.business_idea else detected_lang)
+
+
+def print_summary(lang_code: str = None):
+    """Print summary of received callbacks with language validation"""
     print("\n" + "=" * 60)
     print("Summary")
     print("=" * 60)
     print(f"Total callbacks received: {len(CallbackHandler.callbacks_received)}")
     if CallbackHandler.callbacks_received:
-        print("\nCallback statuses:")
+        print("\nCallback statuses and messages:")
+        print("-" * 60)
+        all_correct_language = True
+        expected_lang_name = LANGUAGE_NAMES.get(lang_code, lang_code) if lang_code else None
+        
         for i, cb in enumerate(CallbackHandler.callbacks_received, 1):
             status = cb.get("status", "unknown")
-            message = cb.get("message", "")[:50]
-            print(f"  {i}. {status}: {message}")
+            message = cb.get("message", "")
+            
+            # Check if message is in expected language (basic check)
+            lang_match = "✓" if expected_lang_name else "?"
+            if expected_lang_name:
+                # Simple validation: message should not be empty
+                if not message or message.strip() == "":
+                    lang_match = "✗"
+                    all_correct_language = False
+                # For non-English, check that message contains non-ASCII characters (rough check)
+                elif lang_code != "en" and all(ord(c) < 128 for c in message):
+                    # Might still be correct if it's an error message, but flag it
+                    if status != "error":
+                        lang_match = "⚠"
+            
+            print(f"  {i}. [{status:20s}] {lang_match}")
+            print(f"      {message}")
+            print()
+        
+        if expected_lang_name:
+            print("-" * 60)
+            if all_correct_language:
+                print(f"✅ All status messages appear to be in {expected_lang_name}")
+            else:
+                print(f"⚠️  Some status messages may not be in {expected_lang_name}")
+            print()
 
 
 if __name__ == "__main__":
