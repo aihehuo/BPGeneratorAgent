@@ -445,9 +445,10 @@ async def get_file(session_id: str, filename: str):
         raise HTTPException(status_code=500, detail=error_msg)
 
 
-def _send_callback(callback_url: str, session_id: str, status: str, message: str, artifacts: Optional[Dict[str, Any]] = None, error: Optional[str] = None):
+def _send_callback(callback_url: str, session_id: str, status: str, message: str, artifacts: Optional[Dict[str, Any]] = None, error: Optional[str] = None, max_retries: int = 2):
     """
     Send status update callback to the provided URL.
+    Callbacks are sent in a separate thread to avoid blocking the main generation process.
     
     Args:
         callback_url: URL to send the callback to
@@ -456,8 +457,10 @@ def _send_callback(callback_url: str, session_id: str, status: str, message: str
         message: Human-readable status message
         artifacts: Optional dict of artifact URLs
         error: Optional error message
+        max_retries: Maximum number of retry attempts (default: 2)
     """
-    try:
+    def _send_with_retry():
+        """Send callback with retry logic in a separate thread"""
         payload = {
             "session_id": session_id,
             "status": status,
@@ -469,13 +472,53 @@ def _send_callback(callback_url: str, session_id: str, status: str, message: str
         if error:
             payload["error"] = error
         
-        # Use httpx to send async HTTP request
-        with httpx.Client(timeout=10.0) as client:
-            response = client.post(callback_url, json=payload)
-            response.raise_for_status()
-    except Exception as e:
-        # Log error but don't fail the generation
-        print(f"Warning: Failed to send callback to {callback_url}: {e}")
+        # Configure timeout: connect timeout (5s) + read timeout (10s)
+        timeout = httpx.Timeout(5.0, read=10.0)
+        
+        for attempt in range(max_retries + 1):
+            try:
+                with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+                    response = client.post(callback_url, json=payload)
+                    response.raise_for_status()
+                    # Success - log only if not first attempt
+                    if attempt > 0:
+                        print(f"✓ Callback sent successfully to {callback_url} (after {attempt + 1} attempts)")
+                    return
+            except httpx.TimeoutException as e:
+                error_msg = f"timeout after {timeout.connect_timeout + timeout.read_timeout}s"
+                if attempt < max_retries:
+                    wait_time = (attempt + 1) * 1  # Exponential backoff: 1s, 2s
+                    print(f"⚠ Callback timeout to {callback_url} (attempt {attempt + 1}/{max_retries + 1}), retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    print(f"⚠ Failed to send callback to {callback_url}: {error_msg} (gave up after {max_retries + 1} attempts)")
+            except httpx.ConnectError as e:
+                error_msg = f"connection error: {str(e)}"
+                if attempt < max_retries:
+                    wait_time = (attempt + 1) * 1
+                    print(f"⚠ Callback connection error to {callback_url} (attempt {attempt + 1}/{max_retries + 1}), retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    print(f"⚠ Failed to send callback to {callback_url}: {error_msg} (gave up after {max_retries + 1} attempts)")
+            except httpx.HTTPStatusError as e:
+                # HTTP error (4xx, 5xx) - don't retry
+                print(f"⚠ Callback HTTP error {e.response.status_code} to {callback_url}: {e.response.text[:200]}")
+                return
+            except Exception as e:
+                error_msg = str(e)
+                if attempt < max_retries:
+                    wait_time = (attempt + 1) * 1
+                    print(f"⚠ Callback error to {callback_url} (attempt {attempt + 1}/{max_retries + 1}): {error_msg}, retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    print(f"⚠ Failed to send callback to {callback_url}: {error_msg} (gave up after {max_retries + 1} attempts)")
+    
+    # Send callback in a separate thread to avoid blocking
+    callback_thread = threading.Thread(target=_send_with_retry, daemon=True)
+    callback_thread.start()
 
 
 def _build_artifact_urls(session_id: str, state: Dict[str, Any], base_url: str = "http://localhost:8000", include_intermediate: bool = False) -> Dict[str, str]:
