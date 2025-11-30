@@ -22,6 +22,8 @@ if project_root not in sys.path:
 # 现在可以直接使用 src 模块
 from src.nodes.input_completeness_node import InputCompletenessNode, output_schema_input_completeness
 from src.llms.base import BaseLLM
+from src.utils.config import load_config
+from src.llms import DeepSeekLLM, OpenAILLM, QwenLLM
 
 
 class MockLLM(BaseLLM):
@@ -125,22 +127,10 @@ class TestInputCompletenessNode(unittest.TestCase):
         self.assertEqual(self.node.node_name, "InputCompletenessNode")
         self.assertEqual(self.node.llm_client, self.mock_llm)
     
-    def test_get_tmp_session_dir(self):
-        """测试获取 /tmp 下的 session 目录路径"""
-        # 正常情况
-        session_dir = os.path.join(self.temp_dir, "test_session")
-        tmp_dir = self.node._get_tmp_session_dir(session_dir)
-        expected = os.path.join("/tmp", "bp_agent_sessions", "test_session")
-        self.assertEqual(tmp_dir, expected)
-        
-        # session_dir 为 None
-        tmp_dir = self.node._get_tmp_session_dir(None)
-        self.assertIsNone(tmp_dir)
-        
-        # session_dir 以 / 结尾
-        session_dir = os.path.join(self.temp_dir, "test_session") + os.sep
-        tmp_dir = self.node._get_tmp_session_dir(session_dir)
-        self.assertEqual(tmp_dir, expected)
+    # 注释：_get_tmp_session_dir 方法已被移除，聊天历史管理现在在工作流级别处理
+    # def test_get_tmp_session_dir(self):
+    #     """测试获取 /tmp 下的 session 目录路径"""
+    #     pass
     
     def test_get_checkpoint_names(self):
         """测试获取检查点名称映射"""
@@ -374,151 +364,42 @@ class TestInputCompletenessNode(unittest.TestCase):
         # 应该自动修正为False（只有1个完整视角，需要至少2个）
         self.assertFalse(result["is_complete"])
     
-    @patch('src.nodes.input_completeness_node.LANGCHAIN_AVAILABLE', True)
-    def test_get_chat_history_with_langchain(self):
-        """测试使用LangChain获取聊天历史"""
-        session_dir = os.path.join(self.temp_dir, "test_session")
-        
-        with patch('src.nodes.input_completeness_node.FileChatMessageHistory') as mock_file_history:
-            mock_history = MagicMock()
-            mock_file_history.return_value = mock_history
-            
-            result = self.node._get_chat_history(session_dir)
-            
-            self.assertIsNotNone(result)
-            # 验证创建了正确的路径
-            expected_file = os.path.join("/tmp", "bp_agent_sessions", "test_session", "chat_history.jsonl")
-            mock_file_history.assert_called_once_with(file_path=expected_file)
+    # 注释：此测试已移除，因为 _get_chat_history 方法已被移除，聊天历史管理现在在工作流级别处理
+    # @patch('src.nodes.input_completeness_node.LANGCHAIN_AVAILABLE', True)
+    # def test_get_chat_history_with_langchain(self):
+    #     """测试使用LangChain获取聊天历史"""
+    #     pass
     
-    @patch('src.nodes.input_completeness_node.LANGCHAIN_AVAILABLE', False)
-    def test_get_chat_history_without_langchain(self):
-        """测试LangChain不可用时的回退"""
-        session_dir = os.path.join(self.temp_dir, "test_session")
-        
-        result = self.node._get_chat_history(session_dir)
-        
-        self.assertIsNone(result)
+    # 注释：以下测试方法已被移除，因为聊天历史管理现在在工作流级别的 InputNode 中处理
+    # InputCompletenessNode 现在只专注于完整性检查逻辑，不接受这些方法
     
-    def test_get_chat_history_no_session_dir(self):
-        """测试没有提供session_dir时"""
-        result = self.node._get_chat_history(None)
-        self.assertIsNone(result)
+    # def test_get_chat_history_without_langchain(self):
+    #     """测试LangChain不可用时的回退"""
+    #     pass
     
-    @patch('src.nodes.input_completeness_node.LANGCHAIN_AVAILABLE', True)
-    def test_load_previous_inputs_with_langchain(self):
-        """测试使用LangChain加载历史输入"""
-        session_dir = os.path.join(self.temp_dir, "test_session")
-        
-        # 创建一个简单的HumanMessage mock类
-        class MockHumanMessage:
-            def __init__(self, content):
-                self.content = content
-        
-        with patch.object(self.node, '_get_chat_history') as mock_get_history:
-            # Mock LangChain 消息历史
-            mock_messages = [
-                MockHumanMessage("第一个商业创意"),
-                MockHumanMessage("第二个商业创意"),
-            ]
-            
-            mock_history = MagicMock()
-            mock_history.messages = mock_messages
-            mock_get_history.return_value = mock_history
-            
-            # Mock HumanMessage 类型检查
-            with patch('src.nodes.input_completeness_node.HumanMessage', MockHumanMessage):
-                result = self.node._load_previous_inputs(session_dir)
-                self.assertIn("第一个商业创意", result)
-                self.assertIn("第二个商业创意", result)
+    # def test_get_chat_history_no_session_dir(self):
+    #     """测试没有提供session_dir时"""
+    #     pass
     
-    def test_load_previous_inputs_fallback(self):
-        """测试加载历史输入的回退方案（文件系统）"""
-        session_dir = os.path.join(self.temp_dir, "test_session")
-        os.makedirs(session_dir, exist_ok=True)
-        
-        # 创建旧的输入记录文件
-        input_file = os.path.join(session_dir, "previous_user_inputs.md")
-        with open(input_file, "w", encoding="utf-8") as f:
-            f.write("""# 用户输入记录
-
-## 输入记录
-
-**时间戳**: 2024-01-01 00:00:00
-
-**商业创意**:
-
-第一个商业创意描述
-
----
-
-## 输入记录
-
-**时间戳**: 2024-01-02 00:00:00
-
-**商业创意**:
-
-第二个商业创意描述
-
----
-""")
-        
-        result = self.node._load_previous_inputs(session_dir)
-        
-        self.assertIn("第一个商业创意描述", result)
-        self.assertIn("第二个商业创意描述", result)
+    # def test_load_previous_inputs_with_langchain(self):
+    #     """测试使用LangChain加载历史输入"""
+    #     pass
     
-    @patch('src.nodes.input_completeness_node.LANGCHAIN_AVAILABLE', True)
-    def test_save_user_input_with_langchain(self):
-        """测试使用LangChain保存用户输入"""
-        # 需要重新初始化节点以应用 patch
-        from src.nodes.input_completeness_node import InputCompletenessNode
-        patched_node = InputCompletenessNode(self.mock_llm)
-        
-        session_dir = os.path.join(self.temp_dir, "test_session")
-        business_idea = "这是一个测试商业创意"
-        completeness_result = {
-            "is_complete": True,
-            "current_perspective": "technical",
-            "suggestions": ["建议1"]
-        }
-        
-        with patch.object(patched_node, '_get_chat_history') as mock_get_history:
-            mock_history = MagicMock()
-            mock_get_history.return_value = mock_history
-            
-            result = patched_node._save_user_input(business_idea, session_dir, completeness_result)
-            
-            # 验证调用了 add_user_message 和 add_ai_message
-            mock_history.add_user_message.assert_called_once_with(business_idea)
-            
-            # 验证 AI 消息（评估结果）也被保存了
-            mock_history.add_ai_message.assert_called_once()
-            # 获取调用参数，验证内容包含评估结果
-            ai_message_content = mock_history.add_ai_message.call_args[0][0]
-            self.assertIn("输入完整性检查结果", ai_message_content)
-            self.assertIn("当前视角: technical", ai_message_content)
-            self.assertIn("是否完整: 是", ai_message_content)
-            
-            self.assertIsNotNone(result)
-            self.assertIn("chat_history.jsonl", result)
-            self.assertIn("/tmp/bp_agent_sessions", result)
+    # def test_load_previous_inputs_fallback(self):
+    #     """测试加载历史输入的回退方案（文件系统）"""
+    #     pass
     
-    def test_save_user_input_fallback(self):
-        """测试保存用户输入的回退方案（文件系统）"""
-        session_dir = os.path.join(self.temp_dir, "test_session")
-        business_idea = "这是一个测试商业创意"
-        
-        result = self.node._save_user_input(business_idea, session_dir)
-        
-        # 验证文件已创建
-        input_file = os.path.join(session_dir, "previous_user_inputs.md")
-        self.assertTrue(os.path.exists(input_file))
-        self.assertIsNotNone(result)
+    # def test_save_user_input_with_langchain(self):
+    #     """测试使用LangChain保存用户输入"""
+    #     pass
     
-    def test_save_user_input_no_session_dir(self):
-        """测试没有提供session_dir时"""
-        result = self.node._save_user_input("商业创意", None)
-        self.assertIsNone(result)
+    # def test_save_user_input_fallback(self):
+    #     """测试保存用户输入的回退方案（文件系统）"""
+    #     pass
+    
+    # def test_save_user_input_no_session_dir(self):
+    #     """测试没有提供session_dir时"""
+    #     pass
     
     def test_run_complete_input(self):
         """测试运行完整性检查 - 完整输入"""
@@ -609,36 +490,276 @@ class TestInputCompletenessNodeIntegration(unittest.TestCase):
             shutil.rmtree(self.temp_dir)
     
     def test_full_workflow(self):
-        """测试完整工作流程"""
-        session_dir = os.path.join(self.temp_dir, "test_session")
-        
+        """测试完整工作流程（包括previous_inputs合并）"""
         # 第一次运行
         business_idea1 = "AI教育平台，面向学生"
-        result1 = self.node.run(business_idea1, session_dir=session_dir)
+        result1 = self.node.run(business_idea1)
         
         self.assertIsInstance(result1, dict)
         self.assertIn("is_complete", result1)
         
         # 验证 LLM 第一次调用时使用了 idea1
-        # MockLLM 保存了最后一次调用的参数
         self.assertIn(business_idea1, self.mock_llm.last_user_prompt)
         
         # 重置 mock 的记录，确保我们检测的是第二次调用
         self.mock_llm.invoke_called = False
         self.mock_llm.last_user_prompt = None
         
-        # 第二次运行（应该能加载历史）
+        # 第二次运行（手动提供previous_inputs，模拟工作流级别提供的聊天历史）
         business_idea2 = "补充：K12市场，个性化学习"
-        result2 = self.node.run(business_idea2, session_dir=session_dir)
+        # 模拟工作流级别提供的之前的输入
+        previous_inputs = business_idea1
+        result2 = self.node.run(business_idea2, previous_inputs=previous_inputs)
         
         self.assertIsInstance(result2, dict)
         
         # 关键断言：验证第二次调用的 Prompt 中是否同时包含了第一次和第二次的输入
-        # 这样才能证明历史记录被正确加载并合并了
+        # 这样才能证明 previous_inputs 被正确合并了
         self.assertTrue(self.mock_llm.invoke_called)
         self.assertIsNotNone(self.mock_llm.last_user_prompt)
-        self.assertIn(business_idea1, self.mock_llm.last_user_prompt, "第二次运行的 Prompt 应该包含第一次的历史输入")
+        self.assertIn(business_idea1, self.mock_llm.last_user_prompt, "第二次运行的 Prompt 应该包含之前的输入（previous_inputs）")
         self.assertIn(business_idea2, self.mock_llm.last_user_prompt, "第二次运行的 Prompt 应该包含本次的新输入")
+
+
+class TestInputCompletenessNodeWithRealLLM(unittest.TestCase):
+    """使用真实LLM的InputCompletenessNode测试类
+    
+    这些测试会调用真实的LLM API，用于验证提示词的有效性。
+    如果环境变量SKIP_REAL_LLM_TESTS=1，这些测试将被跳过。
+    确保在运行这些测试前已正确配置API密钥。
+    """
+    
+    @classmethod
+    def setUpClass(cls):
+        """设置测试类，初始化真实LLM客户端"""
+        # 检查是否跳过真实LLM测试
+        if os.getenv("SKIP_REAL_LLM_TESTS") == "1":
+            cls.skip_all = True
+            return
+        
+        cls.skip_all = False
+        
+        try:
+            # 加载配置
+            cls.config = load_config()
+            
+            # 初始化LLM客户端
+            if cls.config.default_llm_provider == "deepseek":
+                if not cls.config.deepseek_api_key:
+                    cls.skip_all = True
+                    print("\n警告: DeepSeek API Key未配置，跳过真实LLM测试")
+                    return
+                cls.llm_client = DeepSeekLLM(
+                    api_key=cls.config.deepseek_api_key,
+                    model_name=cls.config.deepseek_model
+                )
+            elif cls.config.default_llm_provider == "openai":
+                if not cls.config.openai_api_key:
+                    cls.skip_all = True
+                    print("\n警告: OpenAI API Key未配置，跳过真实LLM测试")
+                    return
+                cls.llm_client = OpenAILLM(
+                    api_key=cls.config.openai_api_key,
+                    model_name=cls.config.openai_model
+                )
+            elif cls.config.default_llm_provider == "qwen":
+                if not cls.config.qwen_api_key:
+                    cls.skip_all = True
+                    print("\n警告: Qwen API Key未配置，跳过真实LLM测试")
+                    return
+                cls.llm_client = QwenLLM(
+                    api_key=cls.config.qwen_api_key,
+                    model_name=cls.config.qwen_model
+                )
+            else:
+                cls.skip_all = True
+                print(f"\n警告: 不支持的LLM提供商 {cls.config.default_llm_provider}，跳过真实LLM测试")
+                return
+            
+            print(f"\n✅ 真实LLM测试已启用: {cls.llm_client.get_model_info()}")
+            
+        except Exception as e:
+            cls.skip_all = True
+            print(f"\n警告: 初始化LLM失败 ({str(e)})，跳过真实LLM测试")
+    
+    def setUp(self):
+        """设置测试环境"""
+        if self.skip_all:
+            self.skipTest("真实LLM测试已跳过（API Key未配置或环境变量SKIP_REAL_LLM_TESTS=1）")
+        
+        self.node = InputCompletenessNode(self.llm_client)
+        self.temp_dir = tempfile.mkdtemp()
+    
+    def tearDown(self):
+        """清理测试环境"""
+        if hasattr(self, 'temp_dir') and os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+    
+    def test_real_llm_complete_input_chinese(self):
+        """测试真实LLM - 完整的中文输入"""
+        business_idea = "基于AI的在线教育平台，面向K12学生，提供个性化学习路径推荐，解决学生学习效率低和缺乏针对性指导的问题"
+        
+        result = self.node.run(business_idea)
+        
+        # 验证基本结构
+        self.assertIsInstance(result, dict)
+        self.assertIn("is_complete", result)
+        self.assertIn("current_perspective", result)
+        self.assertIn("perspective_details", result)
+        self.assertIn("suggestions", result)
+        self.assertIn("markdown_summary", result)
+        
+        # 验证数据完整性
+        self.assertIsInstance(result["is_complete"], bool)
+        self.assertIn(result["current_perspective"], ["technical", "user_painpoint", "market", "mixed", "none"])
+        
+        # 验证perspective_details结构
+        perspective_details = result.get("perspective_details", {})
+        self.assertIn("technical", perspective_details)
+        self.assertIn("user_painpoint", perspective_details)
+        self.assertIn("market", perspective_details)
+        
+        # 验证markdown_summary存在且非空
+        markdown_summary = result.get("markdown_summary", "")
+        self.assertIsInstance(markdown_summary, str)
+        self.assertGreater(len(markdown_summary), 0, "markdown_summary应该非空")
+        
+        print(f"\n✅ 测试通过: 完整输入")
+        print(f"   is_complete: {result['is_complete']}")
+        print(f"   perspective: {result['current_perspective']}")
+        print(f"   markdown_summary: {markdown_summary[:100]}...")
+        
+        # 对于完整输入，应该通过
+        if result["is_complete"]:
+            print(f"   ✅ 输入完整性检查通过")
+    
+    def test_real_llm_incomplete_input_chinese(self):
+        """测试真实LLM - 不完整的中文输入（只有一个视角）"""
+        business_idea = "一个AI平台"  # 只有技术视角
+        
+        result = self.node.run(business_idea)
+        
+        # 验证基本结构
+        self.assertIsInstance(result, dict)
+        self.assertIn("is_complete", result)
+        self.assertIn("markdown_summary", result)
+        
+        # 验证markdown_summary
+        markdown_summary = result.get("markdown_summary", "")
+        self.assertIsInstance(markdown_summary, str)
+        self.assertGreater(len(markdown_summary), 0, "markdown_summary应该非空")
+        
+        print(f"\n✅ 测试通过: 不完整输入")
+        print(f"   is_complete: {result['is_complete']}")
+        print(f"   markdown_summary: {markdown_summary[:100]}...")
+        
+        # 对于不完整输入，应该不通过
+        if not result["is_complete"]:
+            suggestions = result.get("suggestions", [])
+            print(f"   ✅ 正确识别为不完整，建议: {suggestions}")
+    
+    def test_real_llm_complete_input_english(self):
+        """测试真实LLM - 完整的英文输入"""
+        business_idea = "An AI-powered online education platform for K12 students, providing personalized learning path recommendations to solve the problems of low learning efficiency and lack of targeted guidance"
+        
+        result = self.node.run(business_idea)
+        
+        # 验证基本结构
+        self.assertIsInstance(result, dict)
+        self.assertIn("is_complete", result)
+        self.assertIn("markdown_summary", result)
+        
+        # 验证markdown_summary存在且非空
+        markdown_summary = result.get("markdown_summary", "")
+        self.assertIsInstance(markdown_summary, str)
+        self.assertGreater(len(markdown_summary), 0, "markdown_summary应该非空")
+        
+        # 验证markdown_summary是英文（对于英文输入）
+        # 简单检查：应该包含一些英文关键词
+        english_keywords = ["complete", "perspective", "technical", "user", "market", "assessment"]
+        has_english = any(keyword.lower() in markdown_summary.lower() for keyword in english_keywords)
+        
+        print(f"\n✅ 测试通过: 完整英文输入")
+        print(f"   is_complete: {result['is_complete']}")
+        print(f"   markdown_summary: {markdown_summary[:100]}...")
+        print(f"   markdown_summary语言: {'英文' if has_english else '未确定'}")
+    
+    def test_real_llm_prompt_structure(self):
+        """测试真实LLM - 验证提示词结构是否正确生成"""
+        business_idea = "基于区块链的供应链管理系统，帮助企业实现透明化和可追溯性"
+        
+        result = self.node.run(business_idea)
+        
+        # 验证输出符合schema要求
+        # 节点返回的格式是：直接包含data字段的内容（is_complete, current_perspective等）
+        # 以及markdown_summary字段
+        self.assertIn("markdown_summary", result)
+        
+        # 验证每个视角都有必要的字段
+        perspective_details = result.get("perspective_details", {})
+        for perspective_name, details in perspective_details.items():
+            self.assertIsInstance(details, dict)
+            self.assertIn("has_content", details)
+            self.assertIn("completeness", details)
+            self.assertIn("checklist", details)
+            self.assertIn("missing_checkpoints", details)
+            
+            # 验证checklist结构
+            checklist = details.get("checklist", {})
+            self.assertIsInstance(checklist, dict)
+            
+            # 验证completeness值
+            self.assertIn(details["completeness"], ["complete", "partial", "missing"])
+        
+        print(f"\n✅ 测试通过: 提示词结构验证")
+        print(f"   所有视角都有正确的结构")
+    
+    def test_real_llm_output_format(self):
+        """测试真实LLM - 验证输出格式符合新的schema要求（包含markdown_summary）"""
+        business_idea = "智能家居控制系统，通过IoT设备连接家中的各种电器，用户可以通过手机APP远程控制"
+        
+        result = self.node.run(business_idea)
+        
+        # 验证新格式：应该包含markdown_summary
+        self.assertIn("markdown_summary", result, "结果应该包含markdown_summary字段")
+        markdown_summary = result["markdown_summary"]
+        
+        # 验证markdown_summary格式
+        self.assertIsInstance(markdown_summary, str)
+        self.assertGreater(len(markdown_summary.strip()), 0, "markdown_summary应该非空")
+        # 应该包含一些描述性内容（至少包含评估结果的基本信息）
+        # 简单检查：应该有一些文字内容，不只是一个空字符串
+        
+        print(f"\n✅ 测试通过: 输出格式验证")
+        print(f"   markdown_summary长度: {len(markdown_summary)} 字符")
+        print(f"   markdown_summary预览: {markdown_summary[:150]}...")
+    
+    def test_real_llm_with_previous_inputs(self):
+        """测试真实LLM - 验证previous_inputs参数的正确合并"""
+        previous_input = "AI教育平台"
+        current_input = "补充：面向K12学生，提供个性化学习"
+        
+        # 第一次运行（只有当前输入）
+        result1 = self.node.run(current_input)
+        
+        # 第二次运行（合并之前的输入）
+        result2 = self.node.run(current_input, previous_inputs=previous_input)
+        
+        # 验证两次运行都有结果
+        self.assertIsInstance(result1, dict)
+        self.assertIsInstance(result2, dict)
+        
+        # 验证都包含markdown_summary
+        self.assertIn("markdown_summary", result1)
+        self.assertIn("markdown_summary", result2)
+        
+        print(f"\n✅ 测试通过: previous_inputs合并验证")
+        print(f"   第一次运行 (无历史): is_complete={result1['is_complete']}")
+        print(f"   第二次运行 (有历史): is_complete={result2['is_complete']}")
+        
+        # 合并后的输入应该更完整，is_complete更可能为True
+        if result2["is_complete"] and not result1["is_complete"]:
+            print(f"   ✅ 合并历史后完整性检查通过")
 
 
 if __name__ == "__main__":

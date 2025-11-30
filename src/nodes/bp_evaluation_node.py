@@ -9,7 +9,7 @@ from typing import Dict, Any, List
 from json.decoder import JSONDecodeError
 
 from .base_node import BaseNode
-from ..prompts import SYSTEM_PROMPT_BP_EVALUATION
+from ..prompts.bp_evaluation import SYSTEM_PROMPT_BP_EVALUATION
 from ..utils.text_processing import (
     remove_reasoning_from_output,
     clean_json_tags,
@@ -121,27 +121,44 @@ class BPEvaluationNode(BaseNode):
     
     def process_output(self, output: str) -> Dict[str, Any]:
         """
-        处理LLM输出，提取评估结果
+        处理LLM输出，提取评估结果和Markdown摘要
         
         Args:
             output: LLM原始输出
             
         Returns:
-            处理后的评估结果
+            包含评估结果和markdown_summary的字典
         """
         try:
-            # 清理响应文本
-            cleaned_output = remove_reasoning_from_output(output)
-            cleaned_output = clean_json_tags(cleaned_output)
-            
-            # 解析JSON
+            # 首先尝试直接解析JSON（可能已经是纯JSON）
+            parsed_output = None
             try:
-                evaluation_result = json.loads(cleaned_output)
-            except JSONDecodeError:
-                # 使用更强大的提取方法
-                evaluation_result = extract_clean_response(cleaned_output)
-                if not isinstance(evaluation_result, dict):
-                    raise ValueError("评估结果格式错误")
+                parsed_output = json.loads(output)
+                self.log_info("从原始输出成功解析JSON")
+            except (JSONDecodeError, TypeError):
+                # 如果直接解析失败，进行清理后重试
+                cleaned_output = remove_reasoning_from_output(output)
+                cleaned_output = clean_json_tags(cleaned_output)
+                
+                try:
+                    parsed_output = json.loads(cleaned_output)
+                    self.log_info("从清理后的输出成功解析JSON")
+                except JSONDecodeError:
+                    # 使用更强大的提取方法
+                    parsed_output = extract_clean_response(cleaned_output)
+                    if not isinstance(parsed_output, dict):
+                        raise ValueError("评估结果格式错误")
+            
+            # 检查是否是新格式（包含data和markdown_summary）
+            markdown_summary = None
+            if "data" in parsed_output and "markdown_summary" in parsed_output:
+                # 新格式：包含data和markdown_summary
+                evaluation_result = parsed_output["data"]
+                markdown_summary = parsed_output.get("markdown_summary")
+                self.log_info("检测到新格式输出（包含data和markdown_summary）")
+            else:
+                # 旧格式：直接是评估结果
+                evaluation_result = parsed_output
             
             # 验证必需字段
             if "passed" not in evaluation_result:
@@ -155,7 +172,12 @@ class BPEvaluationNode(BaseNode):
             elif not isinstance(evaluation_result["passed"], bool):
                 evaluation_result["passed"] = bool(evaluation_result["passed"])
             
-            return evaluation_result
+            # 返回包含评估结果和markdown_summary的字典
+            result = evaluation_result.copy()
+            if markdown_summary:
+                result["markdown_summary"] = markdown_summary
+            
+            return result
             
         except Exception as e:
             self.log_error(f"处理输出失败: {str(e)}")

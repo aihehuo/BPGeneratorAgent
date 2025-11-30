@@ -8,7 +8,7 @@ from typing import Dict, Any
 from json.decoder import JSONDecodeError
 
 from .base_node import BaseNode
-from ..prompts import SYSTEM_PROMPT_FIRST_SEARCH, SYSTEM_PROMPT_REFLECTION
+from ..prompts.search import SYSTEM_PROMPT_FIRST_SEARCH, SYSTEM_PROMPT_REFLECTION
 from ..utils.text_processing import (
     remove_reasoning_from_output,
     clean_json_tags,

@@ -11,7 +11,7 @@ from typing import Dict, Any, List
 from json.decoder import JSONDecodeError
 
 from .base_node import BaseNode
-from ..prompts import SYSTEM_PROMPT_60S_PITCH
+from ..prompts.pitch_60s import SYSTEM_PROMPT_60S_PITCH
 from ..utils.text_processing import (
     remove_reasoning_from_output,
     clean_json_tags,
@@ -164,29 +164,57 @@ class Pitch60sNode(BaseNode):
                 # 移除控制字符（除了换行、回车、制表符）
                 cleaned_output = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', cleaned_output)
             
-            # 尝试解析JSON
-            pitch_result = None
+            # 首先尝试直接解析JSON（可能已经是纯JSON）
+            parsed_output = None
+            try:
+                if isinstance(output, str):
+                    parsed_output = json.loads(output)
+                    self.log_info("从原始输出成功解析JSON")
+                elif isinstance(output, dict):
+                    parsed_output = output
+            except (JSONDecodeError, TypeError):
+                # 如果直接解析失败，进行清理后重试
+                if isinstance(cleaned_output, str):
+                    try:
+                        parsed_output = json.loads(cleaned_output)
+                        self.log_info("从清理后的输出成功解析JSON")
+                    except (JSONDecodeError, TypeError):
+                        # 策略2: 尝试从original_output解析（可能更完整）
+                        if isinstance(original_output, str):
+                            original_cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', original_output)
+                            try:
+                                parsed_output = json.loads(original_cleaned)
+                                self.log_info("从清理后的原始输出成功解析JSON")
+                            except (JSONDecodeError, TypeError):
+                                # 策略3: 使用extract_clean_response提取JSON
+                                extracted = extract_clean_response(original_output)
+                                if isinstance(extracted, dict) and "error" not in extracted:
+                                    parsed_output = extracted
+                                elif isinstance(extracted, str):
+                                    try:
+                                        parsed_output = json.loads(extracted)
+                                    except (JSONDecodeError, TypeError):
+                                        raise ValueError("无法从输出中提取有效的JSON")
+                                else:
+                                    raise ValueError("无法从输出中提取有效的JSON")
+                elif isinstance(cleaned_output, dict):
+                    parsed_output = cleaned_output
+                else:
+                    raise ValueError("无法解析输出")
             
-            # 策略1: 如果cleaned_output是字符串，尝试直接解析
-            if isinstance(cleaned_output, str):
-                try:
-                    pitch_result = json.loads(cleaned_output)
-                except JSONDecodeError:
-                    # 策略2: 尝试从original_output解析（可能更完整）
-                    if isinstance(original_output, str):
-                        original_cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', original_output)
-                        try:
-                            pitch_result = json.loads(original_cleaned)
-                        except JSONDecodeError:
-                            # 策略3: 使用extract_clean_response提取JSON
-                            extracted = extract_clean_response(original_output)
-                            if extracted:
-                                pitch_result = json.loads(extracted)
-                            else:
-                                raise ValueError("无法从输出中提取有效的JSON")
+            # 检查是否是新格式（包含data和markdown_summary）
+            markdown_summary = None
+            if isinstance(parsed_output, dict):
+                if "data" in parsed_output and "markdown_summary" in parsed_output:
+                    # 新格式：包含data和markdown_summary
+                    pitch_result = parsed_output["data"]
+                    markdown_summary = parsed_output.get("markdown_summary")
+                    self.log_info("检测到新格式输出（包含data和markdown_summary）")
+                else:
+                    # 旧格式：直接是pitch结果
+                    pitch_result = parsed_output
             else:
-                # cleaned_output已经是字典
-                pitch_result = cleaned_output
+                raise ValueError(f"解析后的输出不是字典格式，而是 {type(parsed_output)}")
             
             # 验证必需字段
             if not isinstance(pitch_result, dict):
@@ -247,6 +275,10 @@ class Pitch60sNode(BaseNode):
                 if call_to_action.get("content"):
                     parts.append(call_to_action["content"])
                 pitch_result["full_pitch"] = " ".join(parts)
+            
+            # 如果提取到了markdown_summary，添加到结果中
+            if markdown_summary:
+                pitch_result["markdown_summary"] = markdown_summary
             
             return pitch_result
             

@@ -11,7 +11,7 @@ from typing import Dict, Any, List
 from json.decoder import JSONDecodeError
 
 from .base_node import BaseNode
-from ..prompts import SYSTEM_PROMPT_PPT_GENERATION
+from ..prompts.ppt_generation import SYSTEM_PROMPT_PPT_GENERATION
 from ..utils.text_processing import (
     remove_reasoning_from_output,
     clean_json_tags,
@@ -160,29 +160,57 @@ class PPTGenerationNode(BaseNode):
                 # 移除控制字符（除了换行、回车、制表符）
                 cleaned_output = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', cleaned_output)
             
-            # 尝试解析JSON
-            ppt_result = None
+            # 首先尝试直接解析JSON（可能已经是纯JSON）
+            parsed_output = None
+            try:
+                if isinstance(output, str):
+                    parsed_output = json.loads(output)
+                    self.log_info("从原始输出成功解析JSON")
+                elif isinstance(output, dict):
+                    parsed_output = output
+            except (JSONDecodeError, TypeError):
+                # 如果直接解析失败，进行清理后重试
+                if isinstance(cleaned_output, str):
+                    try:
+                        parsed_output = json.loads(cleaned_output)
+                        self.log_info("从清理后的输出成功解析JSON")
+                    except (JSONDecodeError, TypeError):
+                        # 策略2: 尝试从original_output解析（可能更完整）
+                        if isinstance(original_output, str):
+                            original_cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', original_output)
+                            try:
+                                parsed_output = json.loads(original_cleaned)
+                                self.log_info("从清理后的原始输出成功解析JSON")
+                            except (JSONDecodeError, TypeError):
+                                # 策略3: 使用extract_clean_response提取JSON
+                                extracted = extract_clean_response(original_output)
+                                if isinstance(extracted, dict) and "error" not in extracted:
+                                    parsed_output = extracted
+                                elif isinstance(extracted, str):
+                                    try:
+                                        parsed_output = json.loads(extracted)
+                                    except (JSONDecodeError, TypeError):
+                                        raise ValueError("无法从输出中提取有效的JSON")
+                                else:
+                                    raise ValueError("无法从输出中提取有效的JSON")
+                elif isinstance(cleaned_output, dict):
+                    parsed_output = cleaned_output
+                else:
+                    raise ValueError("无法解析输出")
             
-            # 策略1: 如果cleaned_output是字符串，尝试直接解析
-            if isinstance(cleaned_output, str):
-                try:
-                    ppt_result = json.loads(cleaned_output)
-                except JSONDecodeError:
-                    # 策略2: 尝试从original_output解析（可能更完整）
-                    if isinstance(original_output, str):
-                        original_cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', original_output)
-                        try:
-                            ppt_result = json.loads(original_cleaned)
-                        except JSONDecodeError:
-                            # 策略3: 使用extract_clean_response提取JSON
-                            extracted = extract_clean_response(original_output)
-                            if extracted:
-                                ppt_result = json.loads(extracted)
-                            else:
-                                raise ValueError("无法从输出中提取有效的JSON")
+            # 检查是否是新格式（包含data和markdown_summary）
+            markdown_summary = None
+            if isinstance(parsed_output, dict):
+                if "data" in parsed_output and "markdown_summary" in parsed_output:
+                    # 新格式：包含data和markdown_summary
+                    ppt_result = parsed_output["data"]
+                    markdown_summary = parsed_output.get("markdown_summary")
+                    self.log_info("检测到新格式输出（包含data和markdown_summary）")
+                else:
+                    # 旧格式：直接是PPT结果
+                    ppt_result = parsed_output
             else:
-                # cleaned_output已经是字典
-                ppt_result = cleaned_output
+                raise ValueError(f"解析后的输出不是字典格式，而是 {type(parsed_output)}")
             
             # 验证必需字段
             if not isinstance(ppt_result, dict):
@@ -209,25 +237,30 @@ class PPTGenerationNode(BaseNode):
             if len(slides) != 10:
                 self.log_info(f"警告: PPT包含 {len(slides)} 页，期望10页")
             
-            # 验证每页幻灯片的必需字段
+            # 验证每页幻灯片的必需字段，并在验证前设置默认值
             for i, slide in enumerate(slides):
                 if not isinstance(slide, dict):
-                    debug_file = self._save_debug_output(original_output, cleaned_output)
+                    debug_file = self._save_debug_output(original_output, cleaned_output if 'cleaned_output' in locals() else str(output))
                     error_msg = f"PPT第 {i+1} 页不是字典格式。调试文件已保存到: {debug_file}"
                     self.log_error(error_msg)
                     raise ValueError(error_msg)
                 
+                # 先设置slide_number的默认值（如果缺失）
+                if "slide_number" not in slide or slide.get("slide_number") is None:
+                    slide["slide_number"] = i + 1
+                
+                # 然后验证必需字段
                 required_fields = ["slide_number", "slide_title", "point", "line", "reserved"]
                 missing_fields = [field for field in required_fields if field not in slide]
                 if missing_fields:
-                    debug_file = self._save_debug_output(original_output, cleaned_output)
+                    debug_file = self._save_debug_output(original_output, cleaned_output if 'cleaned_output' in locals() else str(output))
                     error_msg = f"PPT第 {i+1} 页缺少字段: {', '.join(missing_fields)}。调试文件已保存到: {debug_file}"
                     self.log_error(error_msg)
                     raise ValueError(error_msg)
-                
-                # 设置默认值
-                if "slide_number" not in slide or slide.get("slide_number") is None:
-                    slide["slide_number"] = i + 1
+            
+            # 如果提取到了markdown_summary，添加到结果中
+            if markdown_summary:
+                ppt_result["markdown_summary"] = markdown_summary
             
             return ppt_result
             

@@ -15,11 +15,17 @@ class StructureNode:
         # Initialize logic node with business idea
         node_logic = BPStructureNode(self.llm, business_idea)
         
-        structure = node_logic.run()
+        node_result = node_logic.run()
+        
+        # Extract bp_structure and markdown_summary from node result
+        structure = node_result.get("bp_structure", [])
+        markdown_summary = node_result.get("markdown_summary")
         
         result = {
             "bp_structure": structure
         }
+        if markdown_summary:
+            result["markdown_summary"] = markdown_summary
         
         # Persist node output to chat history
         if self.chat_history_manager:
@@ -39,15 +45,21 @@ class StructureNode:
             # Should not happen in normal flow, but safe fallback
             return {}
             
-        structure = node_logic.regenerate(
+        node_result = node_logic.regenerate(
             evaluation_result=evaluation_result.get("evaluation_result", ""),
             suggestions=evaluation_result.get("suggestions", ""),
             current_structure=current_structure
         )
         
+        # Extract bp_structure and markdown_summary from node result
+        structure = node_result.get("bp_structure", [])
+        markdown_summary = node_result.get("markdown_summary")
+        
         result = {
             "bp_structure": structure
         }
+        if markdown_summary:
+            result["markdown_summary"] = markdown_summary
         
         # Persist node output to chat history
         if self.chat_history_manager:

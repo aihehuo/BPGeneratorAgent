@@ -11,7 +11,7 @@ from typing import Dict, Any, List
 from json.decoder import JSONDecodeError
 
 from .base_node import BaseNode
-from ..prompts import SYSTEM_PROMPT_60S_PITCH
+from ..prompts.pitch_60s import SYSTEM_PROMPT_60S_PITCH
 from ..utils.text_processing import (
     remove_reasoning_from_output,
     clean_json_tags,

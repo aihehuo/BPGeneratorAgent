@@ -18,18 +18,27 @@ class EvaluationNode:
         
         result = self.eval_logic.evaluate_paragraphs(business_idea, bp_structure)
         
+        # Extract markdown_summary from result if available
+        markdown_summary = result.get("markdown_summary")
+        # Remove markdown_summary from result to keep evaluation_result clean
+        evaluation_result_clean = {k: v for k, v in result.items() if k != "markdown_summary"}
+        
         # Update iteration history
         history_item = {
             "iteration": state["iteration_count"] + 1,
             "structure": bp_structure, # Note: simple reference, might need deepcopy if mutated
-            "evaluation": result
+            "evaluation": evaluation_result_clean
         }
         
         output = {
-            "evaluation_result": result,
+            "evaluation_result": evaluation_result_clean,
             "iteration_count": state["iteration_count"] + 1,
             "iteration_history": [history_item]
         }
+        
+        # Include markdown_summary if available
+        if markdown_summary:
+            output["markdown_summary"] = markdown_summary
         
         # Persist node output to chat history
         if self.chat_history_manager:

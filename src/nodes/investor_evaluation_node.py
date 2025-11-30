@@ -11,7 +11,7 @@ from typing import Dict, Any, List
 from json.decoder import JSONDecodeError
 
 from .base_node import BaseNode
-from ..prompts import SYSTEM_PROMPT_INVESTOR_EVALUATION
+from ..prompts.investor_evaluation import SYSTEM_PROMPT_INVESTOR_EVALUATION
 from ..utils.text_processing import (
     remove_reasoning_from_output,
     clean_json_tags,
@@ -169,77 +169,81 @@ class InvestorEvaluationNode(BaseNode):
         cleaned_output = None
         
         try:
-            # 清理响应文本
-            cleaned_output = remove_reasoning_from_output(output)
-            cleaned_output = clean_json_tags(cleaned_output)
+            # 首先尝试直接解析JSON（可能已经是纯JSON）
+            parsed_output = None
+            try:
+                parsed_output = json.loads(output)
+                self.log_info("从原始输出成功解析JSON")
+            except (JSONDecodeError, TypeError):
+                # 如果直接解析失败，进行清理后重试
+                cleaned_output = remove_reasoning_from_output(output)
+                cleaned_output = clean_json_tags(cleaned_output)
+                
+                # 修复可能的 JSON 数组格式问题：如果结尾有 ] 但开头没有 [
+                if isinstance(cleaned_output, str):
+                    cleaned_output = cleaned_output.strip()
+                    if cleaned_output.endswith(']') and not cleaned_output.startswith('['):
+                        if cleaned_output.startswith('{'):
+                            cleaned_output = '[' + cleaned_output
+                            self.log_info("检测到缺失的开头 [，已修复")
+                
+                try:
+                    parsed_output = json.loads(cleaned_output)
+                    self.log_info("从清理后的输出成功解析JSON")
+                except (JSONDecodeError, TypeError):
+                    # 使用更强大的提取方法
+                    extracted = extract_clean_response(cleaned_output)
+                    if isinstance(extracted, dict) and "error" not in extracted:
+                        parsed_output = extracted
+                    elif isinstance(extracted, list) and len(extracted) > 0:
+                        parsed_output = extracted[0]
+                    else:
+                        # 最后尝试从原始输出提取
+                        extracted_original = extract_clean_response(original_output)
+                        if isinstance(extracted_original, dict) and "error" not in extracted_original:
+                            parsed_output = extracted_original
+                        elif isinstance(extracted_original, list) and len(extracted_original) > 0:
+                            parsed_output = extracted_original[0]
+                        else:
+                            # 保存调试信息
+                            debug_file = self._save_debug_output(original_output, cleaned_output)
+                            error_msg = f"评估结果格式错误。调试文件已保存到: {debug_file}"
+                            self.log_error(error_msg)
+                            raise ValueError(error_msg)
             
-            # 修复可能的 JSON 数组格式问题：如果结尾有 ] 但开头没有 [
-            if isinstance(cleaned_output, str):
-                cleaned_output = cleaned_output.strip()
-                if cleaned_output.endswith(']') and not cleaned_output.startswith('['):
-                    if cleaned_output.startswith('{'):
-                        cleaned_output = '[' + cleaned_output
-                        self.log_info("检测到缺失的开头 [，已修复")
-            
-            # 检查输出是否已经是字典
-            if isinstance(cleaned_output, dict):
-                evaluation_result = cleaned_output
-            elif isinstance(cleaned_output, list) and len(cleaned_output) > 0:
+            # 检查是否是新格式（包含data和markdown_summary）
+            markdown_summary = None
+            if isinstance(parsed_output, dict):
+                if "data" in parsed_output and "markdown_summary" in parsed_output:
+                    # 新格式：包含data和markdown_summary
+                    evaluation_result = parsed_output["data"]
+                    markdown_summary = parsed_output.get("markdown_summary")
+                    self.log_info("检测到新格式输出（包含data和markdown_summary）")
+                else:
+                    # 旧格式：直接是评估结果
+                    evaluation_result = parsed_output
+            elif isinstance(parsed_output, list) and len(parsed_output) > 0:
                 # 如果是数组，取第一个元素
-                evaluation_result = cleaned_output[0]
+                evaluation_result = parsed_output[0]
                 if not isinstance(evaluation_result, dict):
                     raise ValueError("评估结果数组中的元素不是字典格式")
             else:
-                # 解析JSON字符串
-                evaluation_result = None
-                json_error = None
-                
-                try:
-                    evaluation_result = json.loads(cleaned_output)
-                except (JSONDecodeError, TypeError) as e:
-                    json_error = e
-                    # 如果清理后的输出解析失败，尝试从原始输出解析
-                    try:
-                        # 尝试直接解析原始输出
-                        evaluation_result = json.loads(original_output)
-                        self.log_info("从原始输出成功解析JSON")
-                    except (JSONDecodeError, TypeError):
-                        # 使用更强大的提取方法
-                        extracted = extract_clean_response(cleaned_output)
-                        if isinstance(extracted, dict) and "error" not in extracted:
-                            evaluation_result = extracted
-                        elif isinstance(extracted, list) and len(extracted) > 0:
-                            evaluation_result = extracted[0]
-                        elif isinstance(extracted, str):
-                            # 如果提取的是字符串，尝试再次解析
-                            try:
-                                evaluation_result = json.loads(extracted)
-                            except (JSONDecodeError, TypeError):
-                                # 最后尝试从原始输出提取
-                                extracted_original = extract_clean_response(original_output)
-                                if isinstance(extracted_original, dict) and "error" not in extracted_original:
-                                    evaluation_result = extracted_original
-                                elif isinstance(extracted_original, list) and len(extracted_original) > 0:
-                                    evaluation_result = extracted_original[0]
-                
-                # 如果仍然无法解析
-                if evaluation_result is None:
-                    # 保存调试信息
-                    debug_file = self._save_debug_output(original_output, cleaned_output)
-                    error_msg = f"评估结果格式错误。调试文件已保存到: {debug_file}"
-                    self.log_error(error_msg)
-                    raise ValueError(error_msg)
+                # 保存调试信息
+                debug_file = self._save_debug_output(original_output, cleaned_output if 'cleaned_output' in locals() else str(output))
+                error_msg = f"无法解析评估结果。调试文件已保存到: {debug_file}"
+                self.log_error(error_msg)
+                raise ValueError(error_msg)
             
             # 确保是字典格式
             if not isinstance(evaluation_result, dict):
-                debug_file = self._save_debug_output(original_output, cleaned_output)
+                debug_file = self._save_debug_output(original_output, cleaned_output if 'cleaned_output' in locals() else str(output))
                 error_msg = f"评估结果不是字典格式，而是 {type(evaluation_result)}。调试文件已保存到: {debug_file}"
                 self.log_error(error_msg)
                 raise ValueError(error_msg)
             
             # 验证必需字段（整篇BP评估格式）
             if "overall_assessment" not in evaluation_result:
-                debug_file = self._save_debug_output(original_output, cleaned_output)
+                debug_file = self._save_debug_output(original_output, cleaned_output if 'cleaned_output' in locals() else str(output))
                 error_msg = f"评估结果缺少overall_assessment字段。调试文件已保存到: {debug_file}"
                 self.log_error(error_msg)
                 raise ValueError(error_msg)
@@ -247,6 +251,10 @@ class InvestorEvaluationNode(BaseNode):
                 evaluation_result["suggestions"] = ""
             if "paragraph_specific_feedback" not in evaluation_result:
                 evaluation_result["paragraph_specific_feedback"] = []
+            
+            # 如果提取到了markdown_summary，添加到结果中
+            if markdown_summary:
+                evaluation_result["markdown_summary"] = markdown_summary
             
             return evaluation_result
             

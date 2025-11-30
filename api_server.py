@@ -157,7 +157,7 @@ async def generate_bp(request: GenerateBPRequest):
                     status_code=400,
                     detail=f"Invalid session_id format: {session_id}. Must be a valid UUID format."
                 )
-        # 如果没有提供session_id，传递None，让bp_agent自己生成
+            # 如果没有提供session_id，传递None，让bp_agent自己生成
         
         # 调用generate_bp方法，传入session_id（可能为None）
         result = agent.generate_bp(
@@ -263,7 +263,7 @@ async def generate_bp_preview(request: GenerateBPRequest):
                     status_code=400,
                     detail=f"Invalid session_id format: {session_id}. Must be a valid UUID format."
                 )
-        # 如果没有提供session_id，传递None，让bp_agent自己生成
+            # 如果没有提供session_id，传递None，让bp_agent自己生成
         
         result = agent.generate_bp(
             business_idea=request.business_idea,
@@ -446,7 +446,7 @@ async def get_file(session_id: str, filename: str):
         raise HTTPException(status_code=500, detail=error_msg)
 
 
-def _send_callback(callback_url: str, session_id: str, status: str, message: str, artifacts: Optional[Dict[str, Any]] = None, error: Optional[str] = None, max_retries: int = 2):
+def _send_callback(callback_url: str, session_id: str, status: str, message: str, artifacts: Optional[Dict[str, Any]] = None, intermediate_result: Optional[Dict[str, Any]] = None, error: Optional[str] = None, max_retries: int = 2):
     """
     Send status update callback to the provided URL.
     Callbacks are sent in a separate thread to avoid blocking the main generation process.
@@ -457,6 +457,7 @@ def _send_callback(callback_url: str, session_id: str, status: str, message: str
         status: Status string (e.g., "started", "input_check", "structure_gen", "completed", "error")
         message: Human-readable status message
         artifacts: Optional dict of artifact URLs
+        intermediate_result: Optional intermediate result from the node execution
         error: Optional error message
         max_retries: Maximum number of retry attempts (default: 2)
     """
@@ -470,6 +471,8 @@ def _send_callback(callback_url: str, session_id: str, status: str, message: str
         }
         if artifacts:
             payload["artifacts"] = artifacts
+        if intermediate_result:
+            payload["intermediate_result"] = intermediate_result
         if error:
             payload["error"] = error
         
@@ -579,6 +582,147 @@ def _build_artifact_urls(session_id: str, state: Dict[str, Any], base_url: str =
             artifacts["partner_search"] = f"{base_url}/api/v1/files/{session_id}/partner_report.md"
     
     return artifacts
+
+
+def _generate_markdown_summary(llm, node_name: str, result_data: Dict[str, Any], business_idea: str) -> str:
+    """
+    Generate a human-readable Markdown summary of the node result using LLM.
+    
+    Args:
+        llm: LangChain LLM instance
+        node_name: Name of the node that executed
+        result_data: The result data from the node
+        business_idea: The business idea for context
+        
+    Returns:
+        Markdown-formatted string summary
+    """
+    from langchain_core.messages import HumanMessage, SystemMessage
+    import json
+    
+    # Node-specific prompts
+    node_prompts = {
+        "input_check": """Generate a brief, human-readable Markdown summary of the input completeness check result.
+Focus on whether the input is complete and what suggestions were provided.""",
+        "structure_gen": """Generate a brief, human-readable Markdown summary of the generated BP structure.
+List the main sections/topics that were created.""",
+        "structure_regenerate": """Generate a brief, human-readable Markdown summary of the regenerated BP structure.
+Highlight what was improved or changed based on feedback.""",
+        "structure_eval": """Generate a brief, human-readable Markdown summary of the BP structure evaluation.
+Highlight the evaluation results, whether it passed, and key feedback points.""",
+        "painpoint_enhancement": """Generate a brief, human-readable Markdown summary of the painpoint enhancement.
+Describe what dimensions were selected and how the painpoint was enhanced.""",
+        "investor_eval": """Generate a brief, human-readable Markdown summary of the investor evaluation.
+Highlight key assessment points, concerns, and improvements made.""",
+        "pitch_gen": """Generate a brief, human-readable Markdown summary of the 60-second pitch generation.
+Summarize the key points of the pitch.""",
+        "ppt_gen": """Generate a brief, human-readable Markdown summary of the PPT design generation.
+List the main slides and their purposes.""",
+        "partner_search": """Generate a brief, human-readable Markdown summary of the partner search results.
+Mention how many partners were found and key characteristics.""",
+    }
+    
+    prompt = node_prompts.get(node_name, "Generate a brief, human-readable Markdown summary of this result.")
+    
+    try:
+        # Prepare the data for LLM (limit size to avoid token limits)
+        data_str = json.dumps(result_data, ensure_ascii=False, indent=2)
+        # Truncate if too long (keep first 2000 chars)
+        if len(data_str) > 2000:
+            data_str = data_str[:2000] + "... (truncated)"
+        
+        system_prompt = """You are a helpful assistant that generates concise, human-readable Markdown summaries.
+Generate a brief summary in Markdown format that can be directly displayed to users.
+Keep it concise (2-4 sentences or a short bullet list). Use the same language as the business idea if possible."""
+        
+        user_prompt = f"""{prompt}
+
+Business Idea Context:
+{business_idea[:200]}
+
+Result Data:
+{data_str}
+
+Generate a Markdown summary:"""
+        
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_prompt)
+        ]
+        
+        response = llm.invoke(messages)
+        return response.content.strip()
+        
+    except Exception as e:
+        # Fallback: return a simple text summary
+        print(f"Warning: Failed to generate Markdown summary for {node_name}: {e}")
+        return f"**{node_name}** completed successfully."
+
+
+def _extract_intermediate_result(node_name: str, node_state: Dict[str, Any], llm=None, business_idea: str = "") -> Optional[Dict[str, Any]]:
+    """
+    Extract the relevant intermediate result from node state based on the node that just executed.
+    Extracts Markdown summary directly from node results (if available) instead of generating it.
+    
+    Each node returns different results that get merged into the state. This function extracts
+    the relevant result for each node type and includes the Markdown summary if the node provided it.
+    
+    Args:
+        node_name: Name of the node that just executed
+        node_state: The state dictionary after node execution (contains merged state)
+        llm: Optional LLM instance (not used anymore, kept for backward compatibility)
+        business_idea: Business idea (not used anymore, kept for backward compatibility)
+        
+    Returns:
+        Dictionary containing the intermediate result with node name, data, and Markdown summary (if available)
+    """
+    result_map = {
+        "input_check": "input_completeness",
+        "structure_gen": "bp_structure",
+        "structure_regenerate": "bp_structure",
+        "structure_eval": "evaluation_result",
+        "painpoint_enhancement": "bp_structure",  # Returns updated bp_structure
+        "investor_eval": "bp_structure",  # Returns updated bp_structure  
+        "pitch_gen": "pitch_result",
+        "ppt_gen": "ppt_result",
+        "partner_search": "partner_search_result",
+    }
+    
+    result_key = result_map.get(node_name)
+    if result_key and result_key in node_state:
+        result = node_state.get(result_key)
+        if result is not None:
+            # For nodes that also update iteration_history, include that too
+            iteration_history = node_state.get("iteration_history")
+            
+            intermediate_result = {
+                "node": node_name,
+                "result_key": result_key,
+                "data": result
+            }
+            
+            # Include iteration_history if available (for structure_eval, painpoint_enhancement, investor_eval)
+            if iteration_history and node_name in ["structure_eval", "painpoint_enhancement", "investor_eval"]:
+                # Get the most recent iteration history entry
+                if isinstance(iteration_history, list) and len(iteration_history) > 0:
+                    intermediate_result["iteration_history"] = iteration_history[-1]
+            
+            # For structure_eval, also include iteration_count
+            if node_name == "structure_eval":
+                iteration_count = node_state.get("iteration_count")
+                if iteration_count is not None:
+                    intermediate_result["iteration_count"] = iteration_count
+            
+            # Extract Markdown summary from node state if available
+            # Nodes that return markdown_summary: structure_gen, structure_regenerate, structure_eval
+            markdown_summary = node_state.get("markdown_summary")
+            if markdown_summary:
+                intermediate_result["markdown_summary"] = markdown_summary
+            
+            return intermediate_result
+    
+    # If no specific result found, return None
+    return None
 
 
 # Translation dictionary for status messages
@@ -852,14 +996,21 @@ def _detect_language(text: str) -> str:
     ]
     french_score = sum(1 for pattern in french_patterns if re.search(pattern, text, re.IGNORECASE))
     
-    # Dutch common words
+    # Dutch common words - include more specific Dutch words
     dutch_patterns = [
+        # Common Dutch words
         r'\bde\b', r'\bhet\b', r'\ben\b', r'\bvan\b', r'\bin\b', r'\bis\b', r'\bdat\b',
-        r'\bop\b', r'\bvoor\b', r'\bmet\b', r'\bte\b', r'\bzijn\b', r'\bhebben\b', r'\bier\b'
+        r'\bop\b', r'\bvoor\b', r'\bmet\b', r'\bte\b', r'\bzijn\b', r'\bhebben\b', r'\bier\b',
+        # More specific Dutch words
+        r'\bdie\b', r'\bwat\b', r'\bwie\b', r'\bwaar\b', r'\bwanneer\b', r'\bwaarom\b', r'\bhoe\b',
+        # Dutch-specific compound words and verbs
+        r'\baangedreven\b', r'\bonderwijsplatform\b', r'\bstudenten\b', r'\bgepersonaliseerde\b',
+        r'\bleerpadaanbevelingen\b', r'\bbiedt\b', r'\bworden\b', r'\bgeworden\b', r'\bgeweest\b'
     ]
     dutch_score = sum(1 for pattern in dutch_patterns if re.search(pattern, text, re.IGNORECASE))
     
-    # Find the language with the highest score (minimum threshold of 3)
+    # Find the language with the highest score
+    # Lower threshold to 2 for better detection, but prioritize higher scores
     lang_scores = {
         'de': german_score,
         'es': spanish_score,
@@ -868,9 +1019,24 @@ def _detect_language(text: str) -> str:
         'nl': dutch_score
     }
     
-    max_score_lang = max(lang_scores.items(), key=lambda x: x[1])
-    if max_score_lang[1] >= 3:
-        return max_score_lang[0]
+    # Sort by score (descending) to find the best match
+    sorted_langs = sorted(lang_scores.items(), key=lambda x: x[1], reverse=True)
+    
+    # If we have a clear winner (score >= 2 and at least 2 points higher than second place)
+    if len(sorted_langs) >= 2:
+        best_lang, best_score = sorted_langs[0]
+        second_score = sorted_langs[1][1] if len(sorted_langs) > 1 else 0
+        
+        # If best score is >= 2 and significantly higher than second, use it
+        if best_score >= 2 and (best_score - second_score) >= 2:
+            return best_lang
+        # If best score is >= 3, use it even if second is close
+        elif best_score >= 3:
+            return best_lang
+    
+    # If no clear winner but we have a score >= 2, use the best one
+    if sorted_langs and sorted_langs[0][1] >= 2:
+        return sorted_langs[0][0]
     
     # Default to English
     return 'en'
@@ -988,11 +1154,19 @@ def _run_async_generation(
                     # Translate message to match user's language using status key
                     message = _translate_status_message(business_idea, status)
                     
+                    # Extract intermediate result based on node name (with Markdown summary generation)
+                    intermediate_result = _extract_intermediate_result(
+                        node_name, 
+                        node_state, 
+                        llm=agent.llm, 
+                        business_idea=business_idea
+                    )
+                    
                     # Build artifact URLs from current state (include intermediate artifacts)
                     artifacts = _build_artifact_urls(session_id, node_state, base_url, include_intermediate=True)
                     
-                    # Send callback
-                    _send_callback(callback_url, session_id, status, message, artifacts)
+                    # Send callback with intermediate result
+                    _send_callback(callback_url, session_id, status, message, artifacts, intermediate_result=intermediate_result)
         
         # Ensure we have a final state
         if final_state is None:
@@ -1149,9 +1323,8 @@ async def generate_bp_async(request: GenerateBPAsyncRequest, http_request: Reque
         
         # Translate the initial response message to match user's language
         initial_message = _translate_status_message(
-            agent.llm, 
             request.business_idea, 
-            "BP generation started. Status updates will be sent to the callback URL."
+            "async_started"
         )
         
         return GenerateBPAsyncResponse(

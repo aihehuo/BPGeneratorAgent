@@ -4,7 +4,7 @@ from json.decoder import JSONDecodeError
 
 from .base_node import StateMutationNode
 from ..state.state import State
-from ..prompts import SYSTEM_PROMPT_BP_COMPLETION_GUIDE  # 确保导入BP完整性引导prompt
+from ..prompts.bp_completion_guide import SYSTEM_PROMPT_BP_COMPLETION_GUIDE  # 确保导入BP完整性引导prompt
 from ..utils.text_processing import (
     remove_reasoning_from_output,
     clean_json_tags,

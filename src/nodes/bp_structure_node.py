@@ -12,7 +12,7 @@ from json.decoder import JSONDecodeError
 
 from .base_node import StateMutationNode
 from ..state.state import State
-from ..prompts import SYSTEM_PROMPT_BP_STRUCTURE, SYSTEM_PROMPT_BP_STRUCTURE_REGENERATE
+from ..prompts.bp_structure import SYSTEM_PROMPT_BP_STRUCTURE, SYSTEM_PROMPT_BP_STRUCTURE_REGENERATE
 from ..utils.text_processing import (
     remove_reasoning_from_output,
     clean_json_tags,
@@ -39,7 +39,7 @@ class BPStructureNode(StateMutationNode):
         """验证输入数据"""
         return isinstance(self.business_idea, str) and len(self.business_idea.strip()) > 0
     
-    def run(self, input_data: Any = None, **kwargs) -> List[Dict[str, str]]:
+    def run(self, input_data: Any = None, **kwargs) -> Dict[str, Any]:
         """
         调用LLM生成BP结构
         
@@ -48,7 +48,7 @@ class BPStructureNode(StateMutationNode):
             **kwargs: 额外参数
             
         Returns:
-            BP结构列表
+            包含bp_structure和markdown_summary的字典
         """
         try:
             self.log_info(f"正在为商业创意生成BP结构: {self.business_idea[:50]}...")
@@ -57,9 +57,9 @@ class BPStructureNode(StateMutationNode):
             detected_lang = detect_language(self.business_idea)
             lang_instruction = ""
             if detected_lang == 'en':
-                lang_instruction = "\n\n**CRITICAL LANGUAGE REQUIREMENT: The business_idea is in ENGLISH. You MUST generate ALL output (including title and content fields) in ENGLISH ONLY. Use English titles like 'User Persona & Pain Points', 'Solution', 'Minimum Viable Product (MVP)', etc. DO NOT use Chinese characters anywhere in your output.**\n\n"
+                lang_instruction = "\n\n**CRITICAL LANGUAGE REQUIREMENT: The business_idea is in ENGLISH. You MUST generate ALL output (including title, content fields, and markdown_summary) in ENGLISH ONLY. Use English titles like 'User Persona & Pain Points', 'Solution', 'Minimum Viable Product (MVP)', etc. DO NOT use Chinese characters anywhere in your output.**\n\n"
             else:
-                lang_instruction = "\n\n**CRITICAL LANGUAGE REQUIREMENT: The business_idea is in CHINESE. You MUST generate ALL output (including title and content fields) in CHINESE ONLY. Use Chinese titles like '用户画像与痛点', '解决方案', '最小可行产品（MVP）', etc. DO NOT use English titles or content.**\n\n"
+                lang_instruction = "\n\n**CRITICAL LANGUAGE REQUIREMENT: The business_idea is in CHINESE. You MUST generate ALL output (including title, content fields, and markdown_summary) in CHINESE ONLY. Use Chinese titles like '用户画像与痛点', '解决方案', '最小可行产品（MVP）', etc. DO NOT use English titles or content.**\n\n"
             
             # 准备输入数据，按照input_schema_bp_structure格式
             formatted_input = {
@@ -75,14 +75,15 @@ class BPStructureNode(StateMutationNode):
             # 处理响应
             processed_response = self.process_output(response)
             
-            self.log_info(f"成功生成 {len(processed_response)} 个段落结构")
+            bp_structure = processed_response.get("bp_structure", [])
+            self.log_info(f"成功生成 {len(bp_structure)} 个段落结构")
             return processed_response
             
         except Exception as e:
             self.log_error(f"生成BP结构失败: {str(e)}")
             raise e
     
-    def regenerate(self, evaluation_result: str, suggestions: str, current_structure: List[Dict[str, str]], **kwargs) -> List[Dict[str, str]]:
+    def regenerate(self, evaluation_result: str, suggestions: str, current_structure: List[Dict[str, str]], **kwargs) -> Dict[str, Any]:
         """
         根据评估反馈重新生成BP结构
         
@@ -91,9 +92,9 @@ class BPStructureNode(StateMutationNode):
             suggestions: 修改建议
             current_structure: 当前BP结构
             **kwargs: 额外参数
-            
+        
         Returns:
-            重新生成的BP结构列表
+            包含bp_structure和markdown_summary的字典
         """
         try:
             self.log_info(f"正在根据反馈重新生成BP结构...")
@@ -113,9 +114,9 @@ class BPStructureNode(StateMutationNode):
             
             lang_instruction = ""
             if detected_lang == 'en':
-                lang_instruction = "\n\n**CRITICAL LANGUAGE REQUIREMENT: The business_idea and current_structure are in ENGLISH. You MUST generate ALL output (including title and content fields) in ENGLISH ONLY. Keep the same English titles from current_structure. DO NOT use Chinese characters anywhere in your output.**\n\n"
+                lang_instruction = "\n\n**CRITICAL LANGUAGE REQUIREMENT: The business_idea and current_structure are in ENGLISH. You MUST generate ALL output (including title, content fields, and markdown_summary) in ENGLISH ONLY. Keep the same English titles from current_structure. DO NOT use Chinese characters anywhere in your output.**\n\n"
             else:
-                lang_instruction = "\n\n**CRITICAL LANGUAGE REQUIREMENT: The business_idea and current_structure are in CHINESE. You MUST generate ALL output (including title and content fields) in CHINESE ONLY. Keep the same Chinese titles from current_structure. DO NOT use English titles or content.**\n\n"
+                lang_instruction = "\n\n**CRITICAL LANGUAGE REQUIREMENT: The business_idea and current_structure are in CHINESE. You MUST generate ALL output (including title, content fields, and markdown_summary) in CHINESE ONLY. Keep the same Chinese titles from current_structure. DO NOT use English titles or content.**\n\n"
             
             # 准备输入数据，按照input_schema_bp_structure_regenerate格式
             formatted_input = {
@@ -134,22 +135,23 @@ class BPStructureNode(StateMutationNode):
             # 处理响应
             processed_response = self.process_output(response)
             
-            self.log_info(f"成功重新生成 {len(processed_response)} 个段落结构")
+            bp_structure = processed_response.get("bp_structure", [])
+            self.log_info(f"成功重新生成 {len(bp_structure)} 个段落结构")
             return processed_response
             
         except Exception as e:
             self.log_error(f"重新生成BP结构失败: {str(e)}")
             raise e
     
-    def process_output(self, output: str) -> List[Dict[str, str]]:
+    def process_output(self, output: str) -> Dict[str, Any]:
         """
-        处理LLM输出，提取BP结构
+        处理LLM输出，提取BP结构和Markdown摘要
         
         Args:
             output: LLM原始输出
             
         Returns:
-            处理后的BP结构列表
+            包含bp_structure和markdown_summary的字典
             
         Raises:
             ValueError: 如果JSON解析失败或格式不正确
@@ -157,11 +159,27 @@ class BPStructureNode(StateMutationNode):
         # 保存原始输出和清理后的输出，用于调试
         original_output = output
         cleaned_output = None
+        markdown_summary = None
         
         # 检查输出是否已经是数组或字典（已解析的JSON）
         if isinstance(output, (list, dict)):
-            # 如果已经是数组或字典，直接使用
-            bp_structure = output
+            # 如果已经是数组，说明是旧格式（向后兼容）
+            if isinstance(output, list):
+                bp_structure = output
+            # 如果是字典，检查是否是新格式（包含data和markdown_summary）
+            elif isinstance(output, dict):
+                if "data" in output and "markdown_summary" in output:
+                    # 新格式：包含data和markdown_summary
+                    bp_structure = output["data"]
+                    markdown_summary = output.get("markdown_summary")
+                elif "title" in output and "content" in output:
+                    # 单个段落对象（旧格式）
+                    bp_structure = [output]
+                else:
+                    # 可能是其他格式，尝试查找数组字段
+                    bp_structure = output
+            else:
+                bp_structure = output
         else:
             # 清理响应文本
             cleaned_output = remove_reasoning_from_output(output)
@@ -185,10 +203,10 @@ class BPStructureNode(StateMutationNode):
             
             # 检查清理后的输出是否已经是数组或字典
             if isinstance(cleaned_output, (list, dict)):
-                bp_structure = cleaned_output
+                parsed_output = cleaned_output
             else:
                 # 解析JSON字符串
-                bp_structure = None
+                parsed_output = None
                 json_error = None
                 
                 # 首先尝试解析原始输出（通常更完整）
@@ -196,12 +214,12 @@ class BPStructureNode(StateMutationNode):
                     if isinstance(original_output, str):
                         # 清理原始输出的控制字符
                         cleaned_original = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', original_output)
-                        bp_structure = json.loads(cleaned_original)
+                        parsed_output = json.loads(cleaned_original)
                         self.log_info("从原始输出成功解析JSON")
                 except (JSONDecodeError, TypeError):
                     # 如果原始输出解析失败，尝试清理后的输出
                     try:
-                        bp_structure = json.loads(cleaned_output)
+                        parsed_output = json.loads(cleaned_output)
                     except (JSONDecodeError, TypeError) as e:
                         json_error = e
                         # 使用更强大的提取方法
@@ -210,9 +228,9 @@ class BPStructureNode(StateMutationNode):
                             # 最后尝试从原始输出提取
                             extracted_original = extract_clean_response(original_output)
                             if isinstance(extracted_original, dict) and "error" not in extracted_original:
-                                bp_structure = extracted_original
+                                parsed_output = extracted_original
                             elif isinstance(extracted_original, list) and len(extracted_original) > 0:
-                                bp_structure = extracted_original
+                                parsed_output = extracted_original
                             else:
                                 # 保存原始输出到临时文件
                                 debug_file = self._save_debug_output(original_output, cleaned_output)
@@ -220,15 +238,34 @@ class BPStructureNode(StateMutationNode):
                                 self.log_error(error_msg)
                                 raise ValueError(error_msg) from json_error
                         else:
-                            bp_structure = extracted
+                            parsed_output = extracted
                 
                 # 如果仍然无法解析，抛出异常
-                if bp_structure is None:
+                if parsed_output is None:
                     # 保存原始输出到临时文件
                     debug_file = self._save_debug_output(original_output, cleaned_output)
                     error_msg = f"无法解析JSON响应。调试文件已保存到: {debug_file}"
                     self.log_error(error_msg)
                     raise ValueError(error_msg)
+            
+            # 处理解析后的输出：检查是否是新格式（包含data和markdown_summary）
+            if isinstance(parsed_output, dict):
+                if "data" in parsed_output and "markdown_summary" in parsed_output:
+                    # 新格式：包含data和markdown_summary
+                    bp_structure = parsed_output["data"]
+                    markdown_summary = parsed_output.get("markdown_summary")
+                    self.log_info("检测到新格式输出（包含data和markdown_summary）")
+                elif "title" in parsed_output and "content" in parsed_output:
+                    # 单个段落对象（旧格式）
+                    bp_structure = [parsed_output]
+                else:
+                    # 可能是其他格式，尝试查找数组字段
+                    bp_structure = parsed_output
+            elif isinstance(parsed_output, list):
+                # 旧格式：直接是数组
+                bp_structure = parsed_output
+            else:
+                bp_structure = parsed_output
         
         # 验证结构 - 如果返回的是单个对象，尝试转换为数组
         if isinstance(bp_structure, dict):
@@ -310,7 +347,19 @@ class BPStructureNode(StateMutationNode):
             self.log_error(error_msg)
             raise ValueError(error_msg)
         
-        return validated_structure
+        # 返回包含bp_structure和markdown_summary的字典
+        result = {
+            "bp_structure": validated_structure
+        }
+        
+        # 如果提取到了markdown_summary，添加到结果中
+        if markdown_summary:
+            result["markdown_summary"] = markdown_summary
+        else:
+            # 如果没有markdown_summary，生成一个默认的
+            result["markdown_summary"] = f"已生成包含 {len(validated_structure)} 个段落的BP结构。"
+        
+        return result
     
     def _save_debug_output(self, original_output: Any, cleaned_output: Any) -> str:
         """
