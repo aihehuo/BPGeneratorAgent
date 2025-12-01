@@ -19,6 +19,7 @@ import platform
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 import sys
+import re
 
 
 class CallbackHandler(BaseHTTPRequestHandler):
@@ -45,6 +46,36 @@ class CallbackHandler(BaseHTTPRequestHandler):
             print("=" * 60)
             print(json.dumps(data, indent=2, ensure_ascii=False))
             
+            # Validate markdown_summary if present
+            markdown_summary = data.get('markdown_summary')
+            status = data.get('status', 'unknown')
+            
+            if markdown_summary:
+                # Determine node name from status
+                node_name = status  # Status typically matches node name
+                
+                # Validate markdown_summary format
+                validation_result = validate_markdown_summary(
+                    markdown_summary, 
+                    status,
+                    node_name
+                )
+                if validation_result['valid']:
+                    print(f"\n✅ Markdown Summary Validation: PASSED")
+                    print(f"   Status: {status}")
+                    print(f"   Length: {len(markdown_summary)} characters")
+                    if validation_result.get('preview'):
+                        print(f"   Preview: {validation_result['preview']}")
+                else:
+                    print(f"\n⚠️  Markdown Summary Validation: FAILED")
+                    print(f"   Status: {status}")
+                    print(f"   Issues: {', '.join(validation_result.get('issues', []))}")
+            else:
+                # Check if this status should have markdown_summary
+                if status in NODES_WITH_MARKDOWN_SUMMARY:
+                    print(f"\n⚠️  Markdown Summary Missing")
+                    print(f"   Status: {status} should have markdown_summary but it's missing")
+            
             # Send response
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
@@ -62,6 +93,72 @@ class CallbackHandler(BaseHTTPRequestHandler):
         self.send_header('Content-Type', 'text/plain')
         self.end_headers()
         self.wfile.write(b"Callback server is running")
+
+
+# Nodes that should return markdown_summary in their intermediate results
+NODES_WITH_MARKDOWN_SUMMARY = {
+    "input_check",
+    "structure_gen",
+    "structure_regenerate",
+    "structure_eval",
+    "painpoint_enhancement",
+    "investor_eval",
+    "pitch_gen",
+    "ppt_gen"
+}
+
+
+def validate_markdown_summary(markdown_summary: str, status: str, node_name: str) -> dict:
+    """
+    Validate markdown_summary format and content.
+    
+    Args:
+        markdown_summary: The markdown summary string to validate
+        status: Callback status
+        node_name: Name of the node that generated this summary
+        
+    Returns:
+        Dictionary with validation results:
+        {
+            "valid": bool,
+            "issues": list of issue descriptions,
+            "preview": str (first 150 chars)
+        }
+    """
+    issues = []
+    
+    # Check if it's a string
+    if not isinstance(markdown_summary, str):
+        issues.append(f"markdown_summary is not a string (type: {type(markdown_summary).__name__})")
+        return {"valid": False, "issues": issues}
+    
+    # Check if it's not empty
+    if not markdown_summary or not markdown_summary.strip():
+        issues.append("markdown_summary is empty or whitespace only")
+        return {"valid": False, "issues": issues}
+    
+    # Check minimum length (should have some content)
+    if len(markdown_summary.strip()) < 10:
+        issues.append(f"markdown_summary is too short ({len(markdown_summary.strip())} chars, minimum 10)")
+    
+    # Check if it contains some actual content (not just whitespace or special chars)
+    content_chars = re.sub(r'[\s\*#\[\]()]', '', markdown_summary)
+    if len(content_chars) < 5:
+        issues.append("markdown_summary appears to contain only formatting characters")
+    
+    # Note: We don't require markdown formatting - plain text is acceptable
+    # The summary just needs to be human-readable text
+    
+    # Generate preview
+    preview = markdown_summary[:150].replace('\n', ' ') if len(markdown_summary) > 150 else markdown_summary.replace('\n', ' ')
+    if len(markdown_summary) > 150:
+        preview += "..."
+    
+    return {
+        "valid": len(issues) == 0,
+        "issues": issues,
+        "preview": preview
+    }
 
 
 def get_host_ip_for_docker():
@@ -137,14 +234,25 @@ def start_callback_server(port=8888, bind_all=False):
     return server, thread
 
 
-def test_async_api(business_idea: str, callback_url: str, api_url: str = "http://localhost:8000", expected_lang: str = None, lang_code: str = None):
-    """Test the async API endpoint"""
+def test_async_api(business_idea: str, callback_url: str, api_url: str = "http://localhost:8000", expected_lang: str = None, lang_code: str = None, api_in_docker: bool = False):
+    """Test the async API endpoint
+    
+    Args:
+        business_idea: Business idea to test
+        callback_url: URL for receiving callbacks (should be accessible from API server)
+        api_url: API server URL
+        expected_lang: Expected language code
+        lang_code: Language code for display
+        api_in_docker: If True, API server is running in Docker, so callback URL should use host.docker.internal
+    """
     
     print("=" * 60)
     print("Testing Async BP Generation API")
     print("=" * 60)
     if expected_lang:
         print(f"🌐 Language: {LANGUAGE_NAMES.get(expected_lang, expected_lang)} ({expected_lang})")
+    if api_in_docker:
+        print(f"🐳 API Server is running in Docker container")
     print(f"API URL: {api_url}/api/v1/generate-async")
     print(f"Callback URL: {callback_url}")
     print(f"Business Idea: {business_idea[:80]}...")
@@ -275,8 +383,11 @@ Examples:
   # Test with German
   python test_async_api.py --lang de
   
-  # Test against Docker container
+  # Test against Docker container (API server in Docker)
   python test_async_api.py --lang fr --docker
+  
+  # Test with API server in Docker, explicit callback host
+  python test_async_api.py --lang zh --api-in-docker --docker-host host.docker.internal
   
   # Test with custom business idea
   python test_async_api.py --business-idea "Your custom idea here" --lang es
@@ -312,11 +423,16 @@ Supported languages: {', '.join(TEST_BUSINESS_IDEAS.keys())}
     parser.add_argument(
         "--docker",
         action="store_true",
-        help="Enable Docker mode: bind callback server to 0.0.0.0 and use host IP for callback URL"
+        help="Enable Docker mode: bind callback server to 0.0.0.0 and use host IP for callback URL. Also assumes API server is in Docker."
     )
     parser.add_argument(
         "--docker-host",
         help="Explicit host IP/hostname for Docker containers to reach callback server (e.g., host.docker.internal or 192.168.1.100)"
+    )
+    parser.add_argument(
+        "--api-in-docker",
+        action="store_true",
+        help="Indicate that the API server is running in a Docker container. Callback URL will use host.docker.internal (or --docker-host if provided)"
     )
     
     args = parser.parse_args()
@@ -331,6 +447,7 @@ Supported languages: {', '.join(TEST_BUSINESS_IDEAS.keys())}
     
     # Determine if we should use Docker mode
     use_docker = args.docker or args.docker_host is not None
+    api_in_docker = args.api_in_docker or args.docker  # If --docker is used, assume API is also in Docker
     
     # Setup callback URL
     if args.callback_url:
@@ -341,14 +458,18 @@ Supported languages: {', '.join(TEST_BUSINESS_IDEAS.keys())}
         callback_port = args.callback_port
         
         # Determine callback host
-        if use_docker:
+        # If API is in Docker, callback URL must be accessible from Docker container
+        if use_docker or api_in_docker:
             if args.docker_host:
                 callback_host = args.docker_host
             else:
+                # Use host.docker.internal for Docker containers to reach host
                 callback_host = get_host_ip_for_docker()
             bind_all = True
             print(f"🐳 Docker mode enabled")
-            print(f"   Detected host IP/hostname: {callback_host}")
+            if api_in_docker:
+                print(f"   API Server is in Docker container")
+            print(f"   Callback host for Docker: {callback_host}")
         else:
             callback_host = 'localhost'
             bind_all = False
@@ -356,8 +477,8 @@ Supported languages: {', '.join(TEST_BUSINESS_IDEAS.keys())}
         try:
             server, thread = start_callback_server(callback_port, bind_all=bind_all)
             callback_url = f"http://{callback_host}:{callback_port}"
-            if use_docker:
-                print(f"   Callback URL for Docker: {callback_url}")
+            if use_docker or api_in_docker:
+                print(f"   Callback URL for Docker containers: {callback_url}")
             time.sleep(0.5)  # Give server time to start
         except OSError as e:
             print(f"❌ Could not start callback server on port {callback_port}: {e}")
@@ -370,7 +491,8 @@ Supported languages: {', '.join(TEST_BUSINESS_IDEAS.keys())}
         callback_url=callback_url,
         api_url=args.api_url,
         expected_lang=detected_lang,
-        lang_code=args.lang if args.business_idea else detected_lang
+        lang_code=args.lang if args.business_idea else detected_lang,
+        api_in_docker=api_in_docker
     )
     
     # Print summary
@@ -378,7 +500,7 @@ Supported languages: {', '.join(TEST_BUSINESS_IDEAS.keys())}
 
 
 def print_summary(lang_code: str = None):
-    """Print summary of received callbacks with language validation"""
+    """Print summary of received callbacks with language and markdown_summary validation"""
     print("\n" + "=" * 60)
     print("Summary")
     print("=" * 60)
@@ -387,6 +509,9 @@ def print_summary(lang_code: str = None):
         print("\nCallback statuses and messages:")
         print("-" * 60)
         all_correct_language = True
+        all_markdown_valid = True
+        markdown_summary_count = 0
+        markdown_summary_issues = []
         expected_lang_name = LANGUAGE_NAMES.get(lang_code, lang_code) if lang_code else None
         
         for i, cb in enumerate(CallbackHandler.callbacks_received, 1):
@@ -408,15 +533,61 @@ def print_summary(lang_code: str = None):
             
             print(f"  {i}. [{status:20s}] {lang_match}")
             print(f"      {message}")
+            
+            # Check markdown_summary (now at top level of callback data)
+            markdown_summary = cb.get("markdown_summary")
+            
+            if markdown_summary:
+                markdown_summary_count += 1
+                validation = validate_markdown_summary(markdown_summary, status, status)
+                if validation["valid"]:
+                    print(f"      📝 Markdown Summary: ✅ Valid ({len(markdown_summary)} chars)")
+                    if validation.get("preview"):
+                        print(f"         Preview: {validation['preview']}")
+                else:
+                    all_markdown_valid = False
+                    issues_str = ", ".join(validation["issues"])
+                    print(f"      📝 Markdown Summary: ⚠️  Issues: {issues_str}")
+                    markdown_summary_issues.append({
+                        "callback": i,
+                        "status": status,
+                        "issues": validation["issues"]
+                    })
+            elif status in NODES_WITH_MARKDOWN_SUMMARY:
+                # This status should have markdown_summary but doesn't
+                all_markdown_valid = False
+                print(f"      📝 Markdown Summary: ❌ Missing (expected for {status})")
+                markdown_summary_issues.append({
+                    "callback": i,
+                    "status": status,
+                    "issues": ["markdown_summary is missing"]
+                })
+            
             print()
         
+        # Print language validation summary
         if expected_lang_name:
             print("-" * 60)
             if all_correct_language:
                 print(f"✅ All status messages appear to be in {expected_lang_name}")
             else:
                 print(f"⚠️  Some status messages may not be in {expected_lang_name}")
-            print()
+        
+        # Print markdown_summary validation summary
+        print("-" * 60)
+        print(f"Markdown Summary Validation:")
+        print(f"  Total callbacks with markdown_summary: {markdown_summary_count}")
+        
+        if all_markdown_valid and markdown_summary_count > 0:
+            print(f"  ✅ All markdown_summary validations passed")
+        elif markdown_summary_count == 0:
+            print(f"  ⚠️  No markdown_summary found in any callback")
+        else:
+            print(f"  ⚠️  Found {len(markdown_summary_issues)} markdown_summary issues:")
+            for issue in markdown_summary_issues:
+                print(f"     - Callback #{issue['callback']} ({issue['node']}): {', '.join(issue['issues'])}")
+        
+        print()
 
 
 if __name__ == "__main__":

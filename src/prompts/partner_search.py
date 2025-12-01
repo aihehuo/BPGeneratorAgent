@@ -7,8 +7,8 @@ import json
 
 # ===== JSON Schema 定义 =====
 
-# 搜索短语提取输出Schema
-output_schema_search_phrases = {
+# 搜索短语提取输出Schema（内部数据）
+output_schema_search_phrases_data = {
     "type": "object",
     "properties": {
         "partner_query": {
@@ -23,61 +23,81 @@ output_schema_search_phrases = {
     "required": ["partner_query", "investor_query"]
 }
 
+# 搜索短语提取的最终输出Schema（包含 data 和 markdown_summary）
+output_schema_search_phrases = {
+    "type": "object",
+    "properties": {
+        "data": output_schema_search_phrases_data,
+        "markdown_summary": {
+            "type": "string",
+            "description": "A brief, human-readable Markdown summary (2-4 sentences or short bullet list) describing the extracted search phrases and their purpose. Use the same language as the business plan."
+        }
+    },
+    "required": ["data", "markdown_summary"]
+}
+
 # ===== 系统提示词定义 =====
 
-def get_partner_search_extraction_prompt(bp_summary: str, is_english: bool):
-    """
-    构建合伙人搜索短语提取的系统提示词和用户提示词
-    
-    Args:
-        bp_summary: BP内容摘要
-        is_english: 是否为英文
-        
-    Returns:
-        (system_prompt, extraction_prompt) 元组
-    """
-    if is_english:
-        system_prompt = "You are a professional business plan analyst. Extract search phrases for finding partners and investors from the business plan content. Return only JSON format."
-        extraction_prompt = f"""Extract two search phrases from the following business plan:
+# 合伙人搜索短语提取系统提示词
+SYSTEM_PROMPT_PARTNER_SEARCH = f"""
+你是一个专业的商业计划书分析助手。根据商业计划书内容，提炼出搜索合伙人和投资人的关键词短语。
 
-1. **Partner Search Phrase**: For searching partners/team members (e.g., technical partners, marketing partners, product partners)
-2. **Investor Search Phrase**: For searching investors/investment institutions interested in the project
+**⚠️ 语言要求（最高优先级，必须严格遵守）⚠️**：
+1. 首先检查用户输入的商业计划书内容中是否明确指定了语言（如"用英文"、"in English"、"用中文"、"in Chinese"等）
+2. 如果用户明确指定了语言，则**严格且必须**使用用户指定的语言生成所有输出（包括partner_query、investor_query、markdown_summary）
+3. 如果用户没有明确指定语言，则**自动检测**输入的商业计划书内容的语言：
+   - 如果商业计划书主要是英文（包含大量英文单词和英文语法结构），则**所有输出必须使用英文**
+   - 如果商业计划书主要是中文（包含大量中文字符和中文语法结构），则**所有输出必须使用中文**
+4. **输出的语言必须与用户指定或检测到的输入语言完全一致**，不允许混合使用中英文
 
-Business Plan Content:
-{bp_summary}
+请按照以下JSON模式输出：
 
-Output format (JSON only, no other text):
+<OUTPUT JSON SCHEMA>
 {{
-    "partner_query": "Partner search phrase (10-50 characters, describing required skills, experience, background)",
-    "investor_query": "Investor search phrase (10-50 characters, describing project characteristics and investment needs)"
+  "type": "object",
+  "properties": {{
+    "data": {json.dumps(output_schema_search_phrases_data, indent=2, ensure_ascii=False)},
+    "markdown_summary": {{
+      "type": "string",
+      "description": "一段简短、人类可读的Markdown格式摘要（2-4句话或简短列表），描述提取的搜索短语及其用途。使用与商业计划书相同的语言。"
+    }}
+  }},
+  "required": ["data", "markdown_summary"]
+}}
+</OUTPUT JSON SCHEMA>
+
+**输出格式要求：**
+- 必须返回一个包含两个字段的JSON对象：
+  1. `data`: 搜索短语对象（包含partner_query、investor_query）
+     - `partner_query`: 合伙人搜索短语（10-50个字符，描述所需合伙人的技能、经验、背景等）
+     - `investor_query`: 投资人搜索短语（10-50个字符，描述项目特点和投资需求）
+  2. `markdown_summary`: 一段简短、人类可读的Markdown格式摘要（2-4句话或简短列表），描述：
+     - 提取了哪些搜索短语
+     - 每个搜索短语的用途
+     - 它们针对的关键特征
+     - **使用与商业计划书相同的语言**（英文输入用英文，中文输入用中文）
+
+**重要**：
+- 不要在你的响应中包含模式定义
+- 不要包含 <OUTPUT JSON SCHEMA> 标签
+- 只返回包含实际值的JSON数据，不要返回模式结构
+- 正确输出的示例（中文）：
+{{
+  "data": {{
+    "partner_query": "技术合伙人，AI经验",
+    "investor_query": "教育科技投资人"
+  }},
+  "markdown_summary": "提取了搜索短语..."
+}}
+- 正确输出的示例（英文）：
+{{
+  "data": {{
+    "partner_query": "Technical partner with AI experience",
+    "investor_query": "EdTech investor"
+  }},
+  "markdown_summary": "Extracted search phrases..."
 }}
 
-Requirements:
-- Search phrases should be specific and clear for semantic search
-- Partner search phrase should highlight required skills, experience, industry background
-- Investor search phrase should highlight project characteristics, industry, stage
-- Return ONLY JSON, no explanations"""
-    else:
-        system_prompt = "你是一个专业的商业计划书分析助手。根据商业计划书内容，提炼出搜索合伙人和投资人的关键词短语。只返回JSON格式。"
-        extraction_prompt = f"""根据以下商业计划书内容，提炼出两个搜索短语：
-
-1. **合伙人搜索短语**：用于搜索符合项目需求的合伙人/团队成员（如技术合伙人、市场合伙人、产品合伙人等）
-2. **投资人搜索短语**：用于搜索可能对项目感兴趣的投资人/投资机构
-
-商业计划书内容：
-{bp_summary}
-
-输出格式（只返回JSON，不要包含其他文本）：
-{{
-    "partner_query": "合伙人搜索短语（10-50个字符，描述所需合伙人的技能、经验、背景等）",
-    "investor_query": "投资人搜索短语（10-50个字符，描述项目特点和投资需求）"
-}}
-
-要求：
-- 搜索短语要具体、明确，便于语义搜索
-- 合伙人搜索短语应突出所需技能、经验、行业背景等
-- 投资人搜索短语应突出项目特点、行业、阶段等
-- 只返回JSON，不要包含其他解释"""
-    
-    return system_prompt, extraction_prompt
+不要包含任何解释、模式定义或额外文本。
+"""
 

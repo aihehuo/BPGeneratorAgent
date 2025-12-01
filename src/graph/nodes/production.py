@@ -24,6 +24,10 @@ class ProductionNodes:
         
         pitch_result = self.pitch_logic.generate_pitch(business_idea, bp_structure)
         
+        # Note: We keep markdown_summary inside pitch_result instead of at state top level
+        # to avoid conflicts when parallel nodes (pitch_gen, ppt_gen, partner_search) execute simultaneously.
+        # The markdown_summary will be extracted from pitch_result in api_server.py
+        
         history_item = {
             "iteration": "60s_pitch",
             "pitch_result": pitch_result
@@ -33,6 +37,9 @@ class ProductionNodes:
             "pitch_result": pitch_result,
             "iteration_history": [history_item]
         }
+        
+        # Do NOT set markdown_summary at top level for parallel nodes to avoid LangGraph conflicts
+        # The markdown_summary is already in pitch_result and will be extracted by api_server
         
         # Persist node output to chat history
         if self.chat_history_manager:
@@ -46,6 +53,10 @@ class ProductionNodes:
         
         ppt_result = self.ppt_logic.generate_ppt(business_idea, bp_structure)
         
+        # Note: We keep markdown_summary inside ppt_result instead of at state top level
+        # to avoid conflicts when parallel nodes (pitch_gen, ppt_gen, partner_search) execute simultaneously.
+        # The markdown_summary will be extracted from ppt_result in api_server.py
+        
         history_item = {
             "iteration": "ppt_generation",
             "ppt_result": ppt_result
@@ -55,6 +66,9 @@ class ProductionNodes:
             "ppt_result": ppt_result,
             "iteration_history": [history_item]
         }
+        
+        # Do NOT set markdown_summary at top level for parallel nodes to avoid LangGraph conflicts
+        # The markdown_summary is already in ppt_result and will be extracted by api_server
         
         # Persist node output to chat history
         if self.chat_history_manager:

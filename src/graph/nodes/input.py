@@ -42,6 +42,14 @@ class InputNode:
             session_id=session_id
         )
         
+        # Extract markdown_summary from result if available (for consistency, move to state top level)
+        markdown_summary = None
+        if result and isinstance(result, dict):
+            markdown_summary = result.get("markdown_summary")
+            # Remove markdown_summary from result to keep input_completeness clean
+            if markdown_summary:
+                result = {k: v for k, v in result.items() if k != "markdown_summary"}
+        
         # Save user input to chat history (workflow-level)
         if self.chat_history_manager:
             self.chat_history_manager.add_user_message(business_idea)
@@ -70,10 +78,17 @@ class InputNode:
         
         # Persist node output to chat history (formatted summary)
         if self.chat_history_manager:
-            self.chat_history_manager.persist_node_output("input_check", result)
+            persist_data = result.copy() if result else {}
+            if markdown_summary:
+                persist_data["markdown_summary"] = markdown_summary
+            self.chat_history_manager.persist_node_output("input_check", persist_data)
         
-        # Update state
-        return {
+        # Update state - markdown_summary at top level for consistency
+        output = {
             "input_completeness": result
         }
+        if markdown_summary:
+            output["markdown_summary"] = markdown_summary
+        
+        return output
 

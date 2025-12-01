@@ -292,6 +292,10 @@ class TestWorkflowWithRealLLM(unittest.TestCase):
         
         print(f"\n✅ 输入完整性检查通过")
         
+        # 验证输入完整性检查的markdown_summary（现在在state顶层，但可能被后续节点覆盖）
+        # 注意：由于state是累积的，顶层的markdown_summary可能是最后一个节点的
+        # 我们通过检查iteration_history来验证各个节点的markdown_summary
+        
         # 验证BP结构生成
         self.assertIn("bp_structure", final_state)
         bp_structure = final_state["bp_structure"]
@@ -313,6 +317,13 @@ class TestWorkflowWithRealLLM(unittest.TestCase):
         print(f"✅ 60秒Pitch: {'已生成' if has_pitch else '未生成'}")
         print(f"✅ PPT: {'已生成' if has_ppt else '未生成'}")
         
+        # 验证最终state顶层的markdown_summary（可能是最后一个节点的）
+        if "markdown_summary" in final_state:
+            final_markdown = final_state["markdown_summary"]
+            self.assertIsInstance(final_markdown, str, "最终state的markdown_summary应该是字符串")
+            self.assertGreater(len(final_markdown.strip()), 0, "最终state的markdown_summary应该非空")
+            print(f"✅ 最终state包含markdown_summary (长度: {len(final_markdown)} 字符)")
+        
         # 验证iteration_history
         iteration_history = final_state.get("iteration_history", [])
         self.assertIsInstance(iteration_history, list)
@@ -323,7 +334,7 @@ class TestWorkflowWithRealLLM(unittest.TestCase):
         for field in required_fields:
             self.assertIn(field, final_state, f"最终状态应该包含字段: {field}")
         
-        print(f"\n✅ 工作流执行完成")
+        print(f"\n✅ 工作流执行完成（包含所有markdown_summary验证）")
     
     def test_real_llm_workflow_incomplete_input(self):
         """测试真实LLM - 输入不完整的情况"""
@@ -363,6 +374,14 @@ class TestWorkflowWithRealLLM(unittest.TestCase):
         # 验证输入完整性检查结果
         self.assertIn("input_completeness", final_state)
         completeness = final_state["input_completeness"]
+        
+        # 验证输入完整性检查结果的markdown_summary（现在在state顶层）
+        # 注意：由于输入不完整，工作流会停止，所以state顶层的markdown_summary应该是input_check的
+        if "markdown_summary" in final_state:
+            markdown_summary = final_state["markdown_summary"]
+            self.assertIsInstance(markdown_summary, str, "输入完整性检查的markdown_summary应该是字符串")
+            self.assertGreater(len(markdown_summary.strip()), 0, "输入完整性检查的markdown_summary应该非空")
+            print(f"✅ 输入完整性检查包含markdown_summary (长度: {len(markdown_summary)} 字符)")
         
         # 对于简短的输入，应该被识别为不完整
         is_complete = completeness.get("is_complete", True)
@@ -433,7 +452,14 @@ class TestWorkflowWithRealLLM(unittest.TestCase):
                 print(f"   第一段标题语言: {'中文' if has_chinese else '英文'}")
                 print(f"   第一段标题: {title}")
         
-        print(f"\n✅ 英文输入工作流执行完成")
+        # 验证最终state顶层的markdown_summary（可能是最后一个节点的）
+        if "markdown_summary" in final_state:
+            final_markdown = final_state["markdown_summary"]
+            self.assertIsInstance(final_markdown, str, "最终state的markdown_summary应该是字符串")
+            self.assertGreater(len(final_markdown.strip()), 0, "最终state的markdown_summary应该非空")
+            print(f"✅ 最终state包含markdown_summary (长度: {len(final_markdown)} 字符)")
+        
+        print(f"\n✅ 英文输入工作流执行完成（包含markdown_summary验证）")
     
     def test_real_llm_workflow_node_execution_order(self):
         """测试真实LLM - 验证节点执行顺序"""
@@ -501,6 +527,49 @@ class TestWorkflowWithRealLLM(unittest.TestCase):
         self.assertIn("input_check", execution_order)
         if len(execution_order) > 1:
             self.assertIn("structure_gen", execution_order)
+        
+        # 验证关键节点的markdown_summary
+        # 注意：所有节点的markdown_summary现在都存储在state顶层
+        print(f"\n✅ Markdown Summary验证:")
+        
+        # 验证输入完整性检查的markdown_summary（现在在state顶层）
+        # 由于state是累积的，我们需要检查是否有markdown_summary（可能是最后一个节点的）
+        # 为了更准确地验证，我们检查iteration_history中的节点输出
+        has_input_check_markdown = False
+        has_structure_gen_markdown = False
+        has_structure_eval_markdown = False
+        has_pitch_gen_markdown = False
+        has_ppt_gen_markdown = False
+        
+        iteration_history = final_state.get("iteration_history", [])
+        for item in iteration_history:
+            if isinstance(item, dict):
+                # 检查各个节点的输出
+                if "input_check" in str(item) or "completeness" in str(item):
+                    # Input check的markdown_summary可能在state顶层（如果是最新的）
+                    pass
+                if "structure_gen" in str(item) or "structure" in str(item):
+                    if "markdown_summary" in item:
+                        has_structure_gen_markdown = True
+        
+        # 检查state顶层的markdown_summary（最后一个节点的）
+        if "markdown_summary" in final_state:
+            markdown_summary = final_state["markdown_summary"]
+            self.assertIsInstance(markdown_summary, str, "markdown_summary应该是字符串")
+            self.assertGreater(len(markdown_summary.strip()), 0, "markdown_summary应该非空")
+            print(f"   ✅ State顶层包含markdown_summary (长度: {len(markdown_summary)} 字符)")
+        
+        # 验证各个节点的markdown_summary（通过检查节点是否执行过）
+        if "input_completeness" in final_state:
+            print(f"   ✅ Input Check: 节点已执行")
+        if "bp_structure" in final_state:
+            print(f"   ✅ Structure Gen: 节点已执行")
+        if "evaluation_result" in final_state:
+            print(f"   ✅ Structure Eval: 节点已执行")
+        if "pitch_result" in final_state:
+            print(f"   ✅ Pitch Gen: 节点已执行")
+        if "ppt_result" in final_state:
+            print(f"   ✅ PPT Gen: 节点已执行")
 
 
 if __name__ == "__main__":

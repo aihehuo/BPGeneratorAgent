@@ -6,6 +6,7 @@ BP Generation Agent API Server
 import os
 import sys
 import uuid
+import time
 import threading
 import httpx
 import re
@@ -72,7 +73,7 @@ class GenerateBPAsyncRequest(BaseModel):
     output_file: Optional[str] = Field(None, description="指定输出文件路径（可选）")
     save_report: bool = Field(True, description="是否保存报告到文件")
     session_id: Optional[str] = Field(None, description="Session ID（可选，如果提供则使用该Session，否则创建新的）")
-    callback_url: str = Field(..., description="状态更新回调URL，将接收POST请求包含状态更新和中间产物URL")
+    callback_url: str = Field(..., description="状态更新回调URL，将接收POST请求包含状态更新、markdown摘要和中间产物URL")
 
 
 class GenerateBPResponse(BaseModel):
@@ -446,7 +447,7 @@ async def get_file(session_id: str, filename: str):
         raise HTTPException(status_code=500, detail=error_msg)
 
 
-def _send_callback(callback_url: str, session_id: str, status: str, message: str, artifacts: Optional[Dict[str, Any]] = None, intermediate_result: Optional[Dict[str, Any]] = None, error: Optional[str] = None, max_retries: int = 2):
+def _send_callback(callback_url: str, session_id: str, status: str, message: str, artifacts: Optional[Dict[str, Any]] = None, markdown_summary: Optional[str] = None, error: Optional[str] = None, max_retries: int = 2):
     """
     Send status update callback to the provided URL.
     Callbacks are sent in a separate thread to avoid blocking the main generation process.
@@ -457,7 +458,7 @@ def _send_callback(callback_url: str, session_id: str, status: str, message: str
         status: Status string (e.g., "started", "input_check", "structure_gen", "completed", "error")
         message: Human-readable status message
         artifacts: Optional dict of artifact URLs
-        intermediate_result: Optional intermediate result from the node execution
+        markdown_summary: Optional markdown summary from the node execution
         error: Optional error message
         max_retries: Maximum number of retry attempts (default: 2)
     """
@@ -471,10 +472,18 @@ def _send_callback(callback_url: str, session_id: str, status: str, message: str
         }
         if artifacts:
             payload["artifacts"] = artifacts
-        if intermediate_result:
-            payload["intermediate_result"] = intermediate_result
+        if markdown_summary:
+            payload["markdown_summary"] = markdown_summary
+            print(f"[_send_callback] Including markdown_summary in payload (length: {len(markdown_summary)})")
+        else:
+            print(f"[_send_callback] WARNING: No markdown_summary to include in payload for status: {status}")
         if error:
             payload["error"] = error
+        
+        # Debug: print payload keys for pitch_generation
+        if status == "pitch_generation":
+            print(f"[_send_callback] Payload keys for pitch_generation: {list(payload.keys())}")
+            print(f"[_send_callback] Has markdown_summary: {'markdown_summary' in payload}")
         
         # Configure timeout: connect timeout (5s) + read timeout (10s)
         timeout = httpx.Timeout(5.0, read=10.0)
@@ -484,9 +493,7 @@ def _send_callback(callback_url: str, session_id: str, status: str, message: str
                 with httpx.Client(timeout=timeout, follow_redirects=True) as client:
                     response = client.post(callback_url, json=payload)
                     response.raise_for_status()
-                    # Success - log only if not first attempt
-                    if attempt > 0:
-                        print(f"✓ Callback sent successfully to {callback_url} (after {attempt + 1} attempts)")
+                    print(f"✓ Callback sent successfully to {callback_url} (after {attempt + 1} attempts)")
                     return
             except httpx.TimeoutException as e:
                 error_msg = f"timeout after {timeout.connect_timeout + timeout.read_timeout}s"
@@ -584,105 +591,27 @@ def _build_artifact_urls(session_id: str, state: Dict[str, Any], base_url: str =
     return artifacts
 
 
-def _generate_markdown_summary(llm, node_name: str, result_data: Dict[str, Any], business_idea: str) -> str:
+def _extract_markdown_summary(node_name: str, node_state: Dict[str, Any]) -> Optional[str]:
     """
-    Generate a human-readable Markdown summary of the node result using LLM.
-    
-    Args:
-        llm: LangChain LLM instance
-        node_name: Name of the node that executed
-        result_data: The result data from the node
-        business_idea: The business idea for context
-        
-    Returns:
-        Markdown-formatted string summary
-    """
-    from langchain_core.messages import HumanMessage, SystemMessage
-    import json
-    
-    # Node-specific prompts
-    node_prompts = {
-        "input_check": """Generate a brief, human-readable Markdown summary of the input completeness check result.
-Focus on whether the input is complete and what suggestions were provided.""",
-        "structure_gen": """Generate a brief, human-readable Markdown summary of the generated BP structure.
-List the main sections/topics that were created.""",
-        "structure_regenerate": """Generate a brief, human-readable Markdown summary of the regenerated BP structure.
-Highlight what was improved or changed based on feedback.""",
-        "structure_eval": """Generate a brief, human-readable Markdown summary of the BP structure evaluation.
-Highlight the evaluation results, whether it passed, and key feedback points.""",
-        "painpoint_enhancement": """Generate a brief, human-readable Markdown summary of the painpoint enhancement.
-Describe what dimensions were selected and how the painpoint was enhanced.""",
-        "investor_eval": """Generate a brief, human-readable Markdown summary of the investor evaluation.
-Highlight key assessment points, concerns, and improvements made.""",
-        "pitch_gen": """Generate a brief, human-readable Markdown summary of the 60-second pitch generation.
-Summarize the key points of the pitch.""",
-        "ppt_gen": """Generate a brief, human-readable Markdown summary of the PPT design generation.
-List the main slides and their purposes.""",
-        "partner_search": """Generate a brief, human-readable Markdown summary of the partner search results.
-Mention how many partners were found and key characteristics.""",
-    }
-    
-    prompt = node_prompts.get(node_name, "Generate a brief, human-readable Markdown summary of this result.")
-    
-    try:
-        # Prepare the data for LLM (limit size to avoid token limits)
-        data_str = json.dumps(result_data, ensure_ascii=False, indent=2)
-        # Truncate if too long (keep first 2000 chars)
-        if len(data_str) > 2000:
-            data_str = data_str[:2000] + "... (truncated)"
-        
-        system_prompt = """You are a helpful assistant that generates concise, human-readable Markdown summaries.
-Generate a brief summary in Markdown format that can be directly displayed to users.
-Keep it concise (2-4 sentences or a short bullet list). Use the same language as the business idea if possible."""
-        
-        user_prompt = f"""{prompt}
-
-Business Idea Context:
-{business_idea[:200]}
-
-Result Data:
-{data_str}
-
-Generate a Markdown summary:"""
-        
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=user_prompt)
-        ]
-        
-        response = llm.invoke(messages)
-        return response.content.strip()
-        
-    except Exception as e:
-        # Fallback: return a simple text summary
-        print(f"Warning: Failed to generate Markdown summary for {node_name}: {e}")
-        return f"**{node_name}** completed successfully."
-
-
-def _extract_intermediate_result(node_name: str, node_state: Dict[str, Any], llm=None, business_idea: str = "") -> Optional[Dict[str, Any]]:
-    """
-    Extract the relevant intermediate result from node state based on the node that just executed.
-    Extracts Markdown summary directly from node results (if available) instead of generating it.
+    Extract the markdown summary from node state based on the node that just executed.
     
     Each node returns different results that get merged into the state. This function extracts
-    the relevant result for each node type and includes the Markdown summary if the node provided it.
+    the markdown summary from the appropriate location based on the node type.
     
     Args:
         node_name: Name of the node that just executed
         node_state: The state dictionary after node execution (contains merged state)
-        llm: Optional LLM instance (not used anymore, kept for backward compatibility)
-        business_idea: Business idea (not used anymore, kept for backward compatibility)
         
     Returns:
-        Dictionary containing the intermediate result with node name, data, and Markdown summary (if available)
+        Markdown summary string if available, None otherwise
     """
     result_map = {
         "input_check": "input_completeness",
         "structure_gen": "bp_structure",
         "structure_regenerate": "bp_structure",
         "structure_eval": "evaluation_result",
-        "painpoint_enhancement": "bp_structure",  # Returns updated bp_structure
-        "investor_eval": "bp_structure",  # Returns updated bp_structure  
+        "painpoint_enhancement": "bp_structure",
+        "investor_eval": "bp_structure",
         "pitch_gen": "pitch_result",
         "ppt_gen": "ppt_result",
         "partner_search": "partner_search_result",
@@ -692,37 +621,43 @@ def _extract_intermediate_result(node_name: str, node_state: Dict[str, Any], llm
     if result_key and result_key in node_state:
         result = node_state.get(result_key)
         if result is not None:
-            # For nodes that also update iteration_history, include that too
-            iteration_history = node_state.get("iteration_history")
-            
-            intermediate_result = {
-                "node": node_name,
-                "result_key": result_key,
-                "data": result
-            }
-            
-            # Include iteration_history if available (for structure_eval, painpoint_enhancement, investor_eval)
-            if iteration_history and node_name in ["structure_eval", "painpoint_enhancement", "investor_eval"]:
-                # Get the most recent iteration history entry
-                if isinstance(iteration_history, list) and len(iteration_history) > 0:
-                    intermediate_result["iteration_history"] = iteration_history[-1]
-            
-            # For structure_eval, also include iteration_count
-            if node_name == "structure_eval":
-                iteration_count = node_state.get("iteration_count")
-                if iteration_count is not None:
-                    intermediate_result["iteration_count"] = iteration_count
-            
             # Extract Markdown summary from node state if available
-            # Nodes that return markdown_summary: structure_gen, structure_regenerate, structure_eval
-            markdown_summary = node_state.get("markdown_summary")
-            if markdown_summary:
-                intermediate_result["markdown_summary"] = markdown_summary
+            # For serial nodes (input_check, structure_gen, etc.), markdown_summary is at state top level
+            # For parallel nodes (pitch_gen, ppt_gen), markdown_summary is inside the result dict to avoid conflicts
+            # Try multiple locations to find markdown_summary:
+            # 1. Within the result dict (for parallel nodes like pitch_gen, ppt_gen)
+            # 2. Top level of node_state (for serial nodes)
+            markdown_summary = None
+            if isinstance(result, dict):
+                markdown_summary = result.get("markdown_summary")
+                if markdown_summary:
+                    print(f"[_extract_markdown_summary] Found markdown_summary in {result_key} for node {node_name}")
+                
+                # Special handling for pitch_gen: if no markdown_summary, use full_pitch
+                if not markdown_summary and node_name == "pitch_gen" and "full_pitch" in result:
+                    full_pitch = result.get("full_pitch", "")
+                    if full_pitch:
+                        markdown_summary = full_pitch
+                        print(f"[_extract_markdown_summary] Using full_pitch as markdown_summary for pitch_gen (length: {len(full_pitch)})")
             
-            return intermediate_result
+            if not markdown_summary:
+                markdown_summary = node_state.get("markdown_summary")
+                if markdown_summary:
+                    print(f"[_extract_markdown_summary] Found markdown_summary at top level for node {node_name}")
+            
+            if not markdown_summary:
+                print(f"[_extract_markdown_summary] WARNING: No markdown_summary found for node {node_name} in {result_key}")
+                if isinstance(result, dict):
+                    print(f"[_extract_markdown_summary] Available keys in {result_key}: {list(result.keys())}")
+            
+            return markdown_summary
     
-    # If no specific result found, return None
-    return None
+    # If no specific result found, try top level
+    markdown_summary = node_state.get("markdown_summary")
+    if not markdown_summary:
+        print(f"[_extract_markdown_summary] WARNING: No markdown_summary found for node {node_name} (no result_key match)")
+        print(f"[_extract_markdown_summary] Available keys in node_state: {list(node_state.keys())}")
+    return markdown_summary
 
 
 # Translation dictionary for status messages
@@ -1127,6 +1062,12 @@ def _run_async_generation(
         for event in graph.stream(inputs):
             # event is a dict with node names as keys
             for node_name, node_state in event.items():
+                # IMPORTANT: Extract markdown_summary from node_state BEFORE merging into final_state
+                # because node_state is the immediate output from the node that just executed,
+                # and it contains the markdown_summary at the top level. After merging into final_state,
+                # the markdown_summary might be lost if it's not in the AgentState TypedDict definition.
+                node_markdown_summary = node_state.get("markdown_summary")
+                
                 # Update final_state with the latest state
                 if final_state is None:
                     final_state = node_state.copy()
@@ -1154,19 +1095,36 @@ def _run_async_generation(
                     # Translate message to match user's language using status key
                     message = _translate_status_message(business_idea, status)
                     
-                    # Extract intermediate result based on node name (with Markdown summary generation)
-                    intermediate_result = _extract_intermediate_result(
+                    # Extract markdown summary from node state
+                    # Use node_state to extract the immediate node output
+                    markdown_summary = _extract_markdown_summary(
                         node_name, 
-                        node_state, 
-                        llm=agent.llm, 
-                        business_idea=business_idea
+                        node_state  # Use node_state to get the immediate node output
                     )
                     
-                    # Build artifact URLs from current state (include intermediate artifacts)
-                    artifacts = _build_artifact_urls(session_id, node_state, base_url, include_intermediate=True)
+                    # Use node_markdown_summary if we captured it from node_state (fallback)
+                    if not markdown_summary and node_markdown_summary:
+                        markdown_summary = node_markdown_summary
                     
-                    # Send callback with intermediate result
-                    _send_callback(callback_url, session_id, status, message, artifacts, intermediate_result=intermediate_result)
+                    # Debug logging for pitch_gen
+                    if node_name == "pitch_gen":
+                        print(f"[DEBUG] pitch_gen node_state keys: {list(node_state.keys())}")
+                        if "pitch_result" in node_state:
+                            pitch_result = node_state.get("pitch_result")
+                            if isinstance(pitch_result, dict):
+                                print(f"[DEBUG] pitch_result keys: {list(pitch_result.keys())}")
+                                print(f"[DEBUG] pitch_result has markdown_summary: {'markdown_summary' in pitch_result}")
+                                if "markdown_summary" in pitch_result:
+                                    print(f"[DEBUG] markdown_summary length: {len(pitch_result.get('markdown_summary', ''))}")
+                                if "full_pitch" in pitch_result:
+                                    print(f"[DEBUG] full_pitch length: {len(pitch_result.get('full_pitch', ''))}")
+                        print(f"[DEBUG] Extracted markdown_summary for pitch_gen: {markdown_summary is not None} (length: {len(markdown_summary) if markdown_summary else 0})")
+                    
+                    # Build artifact URLs from current merged state (include intermediate artifacts)
+                    artifacts = _build_artifact_urls(session_id, final_state, base_url, include_intermediate=True)
+                    
+                    # Send callback with markdown summary
+                    _send_callback(callback_url, session_id, status, message, artifacts, markdown_summary=markdown_summary)
         
         # Ensure we have a final state
         if final_state is None:

@@ -40,6 +40,11 @@ class AgentState(TypedDict):
     ppt_result: Optional[Dict[str, Any]]
     partner_search_result: Optional[Dict[str, Any]]
     
+    # Intermediate results with markdown summaries
+    # Each node can set this field to provide a human-readable markdown summary
+    # This field is updated by each node and may be overwritten by subsequent nodes
+    markdown_summary: Optional[str]
+    
     # File Paths (Output)
     output_file: Optional[str]
     partner_report_file: Optional[str]

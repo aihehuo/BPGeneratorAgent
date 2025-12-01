@@ -73,6 +73,9 @@ class PainpointNode:
         # Enhance
         result = self.logic.enhance(business_idea, painpoint_para)
         
+        # Extract markdown_summary from result if available
+        markdown_summary = result.get("markdown_summary")
+        
         # Update structure
         enhanced_content = result.get("enhanced_content", "")
         if enhanced_content:
@@ -95,6 +98,10 @@ class PainpointNode:
                 "bp_structure": new_structure,
                 "iteration_history": [history_item]
             }
+            
+            # Include markdown_summary if available
+            if markdown_summary:
+                output["markdown_summary"] = markdown_summary
             
             # Persist node output to chat history
             if self.chat_history_manager:
@@ -120,6 +127,9 @@ class InvestorEvaluationWrapperNode:
         
         # Evaluate full BP
         investor_eval = self.eval_logic.evaluate_full_bp(business_idea, bp_structure)
+        
+        # Extract markdown_summary from investor_eval if available
+        markdown_summary = investor_eval.get("markdown_summary")
         
         # Apply feedback (Refinement)
         paragraph_feedbacks = investor_eval.get("paragraph_specific_feedback", [])
@@ -180,6 +190,10 @@ class InvestorEvaluationWrapperNode:
             "bp_structure": final_structure,
             "iteration_history": [history_item]
         }
+        
+        # Include markdown_summary if available
+        if markdown_summary:
+            output["markdown_summary"] = markdown_summary
         
         # Persist node output to chat history
         if self.chat_history_manager:

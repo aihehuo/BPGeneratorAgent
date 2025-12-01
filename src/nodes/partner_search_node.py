@@ -8,7 +8,7 @@ import re
 import traceback
 from typing import Dict, Any, List, Optional
 from .base_node import BaseNode
-from ..prompts.partner_search import get_partner_search_extraction_prompt
+from ..prompts.partner_search import SYSTEM_PROMPT_PARTNER_SEARCH
 from ..tools.aihehuo import search_members
 from ..utils.text_processing import (
     remove_reasoning_from_output,
@@ -82,6 +82,7 @@ class PartnerSearchNode(BaseNode):
             
             partner_query = search_phrases.get("partner_query", "")
             investor_query = search_phrases.get("investor_query", "")
+            initial_summary = search_phrases.get("markdown_summary", "")
             
             # 打印提炼出的搜索短语
             self.log_info(f"提炼出的合伙人搜索短语: {partner_query}")
@@ -95,7 +96,8 @@ class PartnerSearchNode(BaseNode):
                 "partner_results": [],
                 "investor_results": [],
                 "partner_count": 0,
-                "investor_count": 0
+                "investor_count": 0,
+                "markdown_summary": initial_summary
             }
             
             # 搜索合伙人
@@ -158,6 +160,19 @@ class PartnerSearchNode(BaseNode):
                 if investor_query:
                     print(f"[PartnerSearch] 投资人搜索短语（无效）: {investor_query}")
             
+            # 生成增强的markdown摘要，包含搜索结果
+            enhanced_summary = self._generate_enhanced_summary(
+                initial_summary=initial_summary,
+                partner_query=partner_query,
+                investor_query=investor_query,
+                partner_count=result["partner_count"],
+                investor_count=result["investor_count"],
+                partner_results=result["partner_results"],
+                investor_results=result["investor_results"],
+                business_idea=business_idea
+            )
+            result["markdown_summary"] = enhanced_summary
+            
             return result
             
         except Exception as e:
@@ -170,8 +185,145 @@ class PartnerSearchNode(BaseNode):
                 "investor_results": [],
                 "partner_count": 0,
                 "investor_count": 0,
+                "markdown_summary": "",
                 "error": str(e)
             }
+    
+    def _generate_enhanced_summary(
+        self,
+        initial_summary: str,
+        partner_query: str,
+        investor_query: str,
+        partner_count: int,
+        investor_count: int,
+        partner_results: List[Dict[str, Any]],
+        investor_results: List[Dict[str, Any]],
+        business_idea: str
+    ) -> str:
+        """
+        生成增强的markdown摘要，包含搜索短语和搜索结果
+        
+        Args:
+            initial_summary: 初始的markdown摘要（从LLM提取搜索短语时生成）
+            partner_query: 合伙人搜索查询
+            investor_query: 投资人搜索查询
+            partner_count: 找到的合伙人数量
+            investor_count: 找到的投资人数量
+            partner_results: 合伙人搜索结果列表
+            investor_results: 投资人搜索结果列表
+            business_idea: 商业创意（用于语言检测）
+            
+        Returns:
+            增强的markdown摘要
+        """
+        try:
+            # 检测语言
+            detected_lang = detect_language(business_idea)
+            is_english = detected_lang == 'en'
+            
+            # 构建增强摘要
+            summary_parts = []
+            
+            # 添加初始摘要（如果有）
+            if initial_summary and initial_summary.strip():
+                summary_parts.append(initial_summary.strip())
+            
+            # 添加搜索结果部分
+            if is_english:
+                summary_parts.append("\n## Search Results")
+                
+                # 合伙人搜索结果
+                if partner_query:
+                    summary_parts.append(f"\n**Partner Search**: Used query \"{partner_query}\"")
+                    if partner_count > 0:
+                        summary_parts.append(f"- Found **{partner_count}** potential partner(s)")
+                        # 添加前3个合伙人的关键信息
+                        if partner_results:
+                            summary_parts.append("- Top matches:")
+                            for i, partner in enumerate(partner_results[:3], 1):
+                                name = partner.get("name", partner.get("nickname", "Unknown"))
+                                bio = partner.get("bio", partner.get("goal", ""))
+                                if bio:
+                                    bio_preview = bio[:50] + "..." if len(bio) > 50 else bio
+                                    summary_parts.append(f"  {i}. {name}: {bio_preview}")
+                                else:
+                                    summary_parts.append(f"  {i}. {name}")
+                    else:
+                        summary_parts.append("- No partners found matching the criteria")
+                else:
+                    summary_parts.append("\n**Partner Search**: No valid search query generated")
+                
+                # 投资人搜索结果
+                if investor_query:
+                    summary_parts.append(f"\n**Investor Search**: Used query \"{investor_query}\"")
+                    if investor_count > 0:
+                        summary_parts.append(f"- Found **{investor_count}** potential investor(s)")
+                        # 添加前3个投资人的关键信息
+                        if investor_results:
+                            summary_parts.append("- Top matches:")
+                            for i, investor in enumerate(investor_results[:3], 1):
+                                name = investor.get("name", investor.get("nickname", "Unknown"))
+                                bio = investor.get("bio", investor.get("goal", ""))
+                                if bio:
+                                    bio_preview = bio[:50] + "..." if len(bio) > 50 else bio
+                                    summary_parts.append(f"  {i}. {name}: {bio_preview}")
+                                else:
+                                    summary_parts.append(f"  {i}. {name}")
+                    else:
+                        summary_parts.append("- No investors found matching the criteria")
+                else:
+                    summary_parts.append("\n**Investor Search**: No valid search query generated")
+            else:
+                summary_parts.append("\n## 搜索结果")
+                
+                # 合伙人搜索结果
+                if partner_query:
+                    summary_parts.append(f"\n**合伙人搜索**：使用查询 \"{partner_query}\"")
+                    if partner_count > 0:
+                        summary_parts.append(f"- 找到 **{partner_count}** 位潜在合伙人")
+                        # 添加前3个合伙人的关键信息
+                        if partner_results:
+                            summary_parts.append("- 匹配结果：")
+                            for i, partner in enumerate(partner_results[:3], 1):
+                                name = partner.get("name", partner.get("nickname", "未知"))
+                                bio = partner.get("bio", partner.get("goal", ""))
+                                if bio:
+                                    bio_preview = bio[:50] + "..." if len(bio) > 50 else bio
+                                    summary_parts.append(f"  {i}. {name}：{bio_preview}")
+                                else:
+                                    summary_parts.append(f"  {i}. {name}")
+                    else:
+                        summary_parts.append("- 未找到符合条件的合伙人")
+                else:
+                    summary_parts.append("\n**合伙人搜索**：未生成有效的搜索查询")
+                
+                # 投资人搜索结果
+                if investor_query:
+                    summary_parts.append(f"\n**投资人搜索**：使用查询 \"{investor_query}\"")
+                    if investor_count > 0:
+                        summary_parts.append(f"- 找到 **{investor_count}** 位潜在投资人")
+                        # 添加前3个投资人的关键信息
+                        if investor_results:
+                            summary_parts.append("- 匹配结果：")
+                            for i, investor in enumerate(investor_results[:3], 1):
+                                name = investor.get("name", investor.get("nickname", "未知"))
+                                bio = investor.get("bio", investor.get("goal", ""))
+                                if bio:
+                                    bio_preview = bio[:50] + "..." if len(bio) > 50 else bio
+                                    summary_parts.append(f"  {i}. {name}：{bio_preview}")
+                                else:
+                                    summary_parts.append(f"  {i}. {name}")
+                    else:
+                        summary_parts.append("- 未找到符合条件的投资人")
+                else:
+                    summary_parts.append("\n**投资人搜索**：未生成有效的搜索查询")
+            
+            return "\n".join(summary_parts)
+            
+        except Exception as e:
+            self.log_error(f"生成增强摘要失败: {str(e)}")
+            # 如果失败，至少返回初始摘要
+            return initial_summary if initial_summary else ""
     
     def _extract_search_phrases(
         self,
@@ -186,20 +338,12 @@ class PartnerSearchNode(BaseNode):
             bp_structure: BP结构列表
             
         Returns:
-            包含partner_query和investor_query的字典
+            包含partner_query、investor_query和markdown_summary的字典
         """
         try:
-            # 检测语言
-            detected_lang = detect_language(business_idea)
-            is_english = detected_lang == 'en'
-            
-            # 构建BP内容摘要（根据语言选择标签）
-            if is_english:
-                bp_content = f"Business Idea: {business_idea}\n\n"
-                bp_content += "Business Plan Structure:\n"
-            else:
-                bp_content = f"商业创意：{business_idea}\n\n"
-                bp_content += "商业计划书结构：\n"
+            # 构建BP内容摘要
+            bp_content = f"商业创意：{business_idea}\n\n"
+            bp_content += "商业计划书结构：\n"
             
             for idx, section in enumerate(bp_structure, 1):
                 title = section.get("title", f"段落{idx}")
@@ -209,13 +353,26 @@ class PartnerSearchNode(BaseNode):
             # 限制BP内容长度
             bp_summary = bp_content[:2500]  # 限制长度避免token过多
             
-            # 使用LLM提炼搜索短语
-            system_prompt, extraction_prompt = get_partner_search_extraction_prompt(bp_summary, is_english)
+            # 构建用户提示词
+            user_prompt = f"""根据以下商业计划书内容，提炼出两个搜索短语：
+
+1. **合伙人搜索短语**：用于搜索符合项目需求的合伙人/团队成员（如技术合伙人、市场合伙人、产品合伙人等）
+2. **投资人搜索短语**：用于搜索可能对项目感兴趣的投资人/投资机构
+
+商业计划书内容：
+{bp_summary}
+
+要求：
+- 搜索短语要具体、明确，便于语义搜索
+- 合伙人搜索短语应突出所需技能、经验、行业背景等
+- 投资人搜索短语应突出项目特点、行业、阶段等
+- 返回系统提示中指定格式的JSON，不要包含其他解释
+- **输出的语言必须与商业计划书的语言一致**（英文输入用英文，中文输入用中文）"""
 
             self.log_info("正在使用LLM提炼搜索短语...")
             response = self.invoke_llm(
-                system_prompt,
-                extraction_prompt
+                SYSTEM_PROMPT_PARTNER_SEARCH,
+                user_prompt
             )
             
             # 打印LLM原始响应（用于调试）
@@ -229,8 +386,11 @@ class PartnerSearchNode(BaseNode):
             # 打印解析后的搜索短语
             parsed_partner = search_phrases.get("partner_query", "")
             parsed_investor = search_phrases.get("investor_query", "")
+            initial_summary = search_phrases.get("markdown_summary", "")
             self.log_info(f"解析后的合伙人搜索短语: {parsed_partner}")
             self.log_info(f"解析后的投资人搜索短语: {parsed_investor}")
+            if initial_summary:
+                self.log_info(f"初始Markdown摘要: {initial_summary[:100]}...")
             print(f"[PartnerSearch] 解析后的合伙人搜索短语: {parsed_partner}")
             print(f"[PartnerSearch] 解析后的投资人搜索短语: {parsed_investor}")
             
@@ -241,18 +401,19 @@ class PartnerSearchNode(BaseNode):
             # 如果失败，使用简化的默认查询
             return {
                 "partner_query": f"寻找{business_idea[:30]}项目的合伙人",
-                "investor_query": f"寻找{business_idea[:30]}项目的投资人"
+                "investor_query": f"寻找{business_idea[:30]}项目的投资人",
+                "markdown_summary": ""
             }
     
     def _parse_search_phrases(self, response: str) -> Dict[str, str]:
         """
-        解析LLM响应中的搜索短语
+        解析LLM响应中的搜索短语和markdown摘要
         
         Args:
             response: LLM响应文本
             
         Returns:
-            包含partner_query和investor_query的字典
+            包含partner_query、investor_query和markdown_summary的字典
         """
         try:
             # 清理响应文本
@@ -260,14 +421,58 @@ class PartnerSearchNode(BaseNode):
             cleaned_response = clean_json_tags(cleaned_response)
             cleaned_response = cleaned_response.strip()
             
+            # 如果响应包含schema定义，LLM可能把实际值放在"description"字段中
+            # 尝试从schema的description字段提取实际值
+            import re
+            if '"type"' in cleaned_response and '"description"' in cleaned_response:
+                # 尝试从schema的description字段提取partner_query和investor_query
+                # 查找 "partner_query" 后面的第一个 "description" 字段的值
+                partner_desc_match = re.search(r'"partner_query"[^}]*?"description"\s*:\s*"([^"]+)"', cleaned_response, re.DOTALL)
+                investor_desc_match = re.search(r'"investor_query"[^}]*?"description"\s*:\s*"([^"]+)"', cleaned_response, re.DOTALL)
+                
+                if partner_desc_match and investor_desc_match:
+                    # 找到了description字段中的值，构造正确的JSON结构
+                    partner_value = partner_desc_match.group(1)
+                    investor_value = investor_desc_match.group(1)
+                    
+                    # 尝试提取markdown_summary（可能在description中，也可能在别处）
+                    markdown_desc_match = re.search(r'"markdown_summary"\s*:\s*\{[^}]*"description"\s*:\s*"([^"]+)"', cleaned_response, re.DOTALL)
+                    markdown_value = markdown_desc_match.group(1) if markdown_desc_match else ""
+                    
+                    # 返回提取的值
+                    self.log_info("从schema的description字段成功提取了搜索短语")
+                    return {
+                        "partner_query": partner_value.strip(),
+                        "investor_query": investor_value.strip(),
+                        "markdown_summary": markdown_value.strip()
+                    }
+            
+            # 如果响应包含schema标签，尝试提取标签之后的内容
+            if "</OUTPUT JSON SCHEMA>" in cleaned_response:
+                parts = cleaned_response.split("</OUTPUT JSON SCHEMA>")
+                if len(parts) > 1:
+                    cleaned_response = parts[-1].strip()
+            
             # 尝试使用extract_clean_response提取JSON
             try:
                 extracted = extract_clean_response(cleaned_response)
-                if isinstance(extracted, dict) and "partner_query" in extracted and "investor_query" in extracted:
-                    return {
-                        "partner_query": str(extracted.get("partner_query", "")).strip(),
-                        "investor_query": str(extracted.get("investor_query", "")).strip()
-                    }
+                if isinstance(extracted, dict):
+                    # 支持新的嵌套结构：{data: {partner_query, investor_query}, markdown_summary}
+                    if "data" in extracted and isinstance(extracted["data"], dict):
+                        data = extracted["data"]
+                        if "partner_query" in data and "investor_query" in data:
+                            return {
+                                "partner_query": str(data.get("partner_query", "")).strip(),
+                                "investor_query": str(data.get("investor_query", "")).strip(),
+                                "markdown_summary": str(extracted.get("markdown_summary", "")).strip()
+                            }
+                    # 支持旧的扁平结构：{partner_query, investor_query}（向后兼容）
+                    elif "partner_query" in extracted and "investor_query" in extracted:
+                        return {
+                            "partner_query": str(extracted.get("partner_query", "")).strip(),
+                            "investor_query": str(extracted.get("investor_query", "")).strip(),
+                            "markdown_summary": str(extracted.get("markdown_summary", "")).strip()
+                        }
             except:
                 pass
             
@@ -276,11 +481,23 @@ class PartnerSearchNode(BaseNode):
                 # 先尝试直接解析整个响应
                 try:
                     result = json.loads(cleaned_response)
-                    if isinstance(result, dict) and "partner_query" in result and "investor_query" in result:
-                        return {
-                            "partner_query": str(result.get("partner_query", "")).strip(),
-                            "investor_query": str(result.get("investor_query", "")).strip()
-                        }
+                    if isinstance(result, dict):
+                        # 支持新的嵌套结构：{data: {partner_query, investor_query}, markdown_summary}
+                        if "data" in result and isinstance(result["data"], dict):
+                            data = result["data"]
+                            if "partner_query" in data and "investor_query" in data:
+                                return {
+                                    "partner_query": str(data.get("partner_query", "")).strip(),
+                                    "investor_query": str(data.get("investor_query", "")).strip(),
+                                    "markdown_summary": str(result.get("markdown_summary", "")).strip()
+                                }
+                        # 支持旧的扁平结构：{partner_query, investor_query}（向后兼容）
+                        elif "partner_query" in result and "investor_query" in result:
+                            return {
+                                "partner_query": str(result.get("partner_query", "")).strip(),
+                                "investor_query": str(result.get("investor_query", "")).strip(),
+                                "markdown_summary": str(result.get("markdown_summary", "")).strip()
+                            }
                 except json.JSONDecodeError:
                     pass
                 
@@ -305,24 +522,51 @@ class PartnerSearchNode(BaseNode):
                 for json_str in json_objects:
                     try:
                         result = json.loads(json_str)
-                        if isinstance(result, dict) and "partner_query" in result and "investor_query" in result:
-                            return {
-                                "partner_query": str(result.get("partner_query", "")).strip(),
-                                "investor_query": str(result.get("investor_query", "")).strip()
-                            }
+                        if isinstance(result, dict):
+                            # 支持新的嵌套结构：{data: {partner_query, investor_query}, markdown_summary}
+                            if "data" in result and isinstance(result["data"], dict):
+                                data = result["data"]
+                                if "partner_query" in data and "investor_query" in data:
+                                    return {
+                                        "partner_query": str(data.get("partner_query", "")).strip(),
+                                        "investor_query": str(data.get("investor_query", "")).strip(),
+                                        "markdown_summary": str(result.get("markdown_summary", "")).strip()
+                                    }
+                            # 支持旧的扁平结构：{partner_query, investor_query}（向后兼容）
+                            elif "partner_query" in result and "investor_query" in result:
+                                return {
+                                    "partner_query": str(result.get("partner_query", "")).strip(),
+                                    "investor_query": str(result.get("investor_query", "")).strip(),
+                                    "markdown_summary": str(result.get("markdown_summary", "")).strip()
+                                }
                     except json.JSONDecodeError:
                         continue
             except Exception as e:
                 self.log_info(f"JSON解析尝试失败: {str(e)}")
             
-            # 尝试正则表达式提取
+            # 尝试正则表达式提取（支持嵌套和扁平结构）
             try:
+                # 先尝试在"data"对象内查找（新结构）
+                data_match = re.search(r'"data"\s*:\s*\{[^}]*"partner_query"\s*:\s*"([^"]+)"[^}]*"investor_query"\s*:\s*"([^"]+)"', cleaned_response, re.IGNORECASE | re.DOTALL)
+                # 尝试提取markdown_summary
+                summary_match = re.search(r'"markdown_summary"\s*:\s*"([^"]+)"', cleaned_response, re.IGNORECASE | re.DOTALL)
+                summary_text = summary_match.group(1).strip() if summary_match else ""
+                
+                if data_match:
+                    return {
+                        "partner_query": data_match.group(1).strip(),
+                        "investor_query": data_match.group(2).strip(),
+                        "markdown_summary": summary_text
+                    }
+                
+                # 如果没找到，尝试扁平结构（向后兼容）
                 partner_match = re.search(r'"partner_query"\s*:\s*"([^"]+)"', cleaned_response, re.IGNORECASE)
                 investor_match = re.search(r'"investor_query"\s*:\s*"([^"]+)"', cleaned_response, re.IGNORECASE)
                 if partner_match and investor_match:
                     return {
                         "partner_query": partner_match.group(1).strip(),
-                        "investor_query": investor_match.group(1).strip()
+                        "investor_query": investor_match.group(1).strip(),
+                        "markdown_summary": summary_text
                     }
             except Exception as e:
                 self.log_info(f"正则表达式提取失败: {str(e)}")
@@ -352,14 +596,16 @@ class PartnerSearchNode(BaseNode):
             
             return {
                 "partner_query": partner_query,
-                "investor_query": investor_query
+                "investor_query": investor_query,
+                "markdown_summary": ""
             }
             
         except Exception as e:
             self.log_error(f"解析搜索短语失败: {str(e)}")
             return {
                 "partner_query": "",
-                "investor_query": ""
+                "investor_query": "",
+                "markdown_summary": ""
             }
     
 

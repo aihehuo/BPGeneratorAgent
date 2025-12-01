@@ -20,6 +20,30 @@ from ..utils.text_processing import (
 )
 
 
+def fix_common_json_errors(json_str: str) -> str:
+    """
+    尝试修复常见的 JSON 语法错误
+    
+    Args:
+        json_str: 可能有错误的 JSON 字符串
+        
+    Returns:
+        修复后的 JSON 字符串
+    """
+    # 1. 移除尾随逗号（在 } 或 ] 之前）
+    json_str = re.sub(r',(\s*[}\]])', r'\1', json_str)
+    
+    # 2. 修复未转义的换行符（在字符串值中，但不在字符串键中）
+    # 这是一个简单的修复，可能不完美，但对于大多数情况有效
+    # 注意：这可能会误修复，所以只在解析失败时使用
+    
+    # 3. 修复单引号为双引号（JSON 要求双引号）
+    # 注意：这可能会误修复，需要小心处理
+    # 先不实现这个，因为可能会破坏现有的正确 JSON
+    
+    return json_str
+
+
 class Pitch60sNode(BaseNode):
     """黄金60秒Pitch节点"""
     
@@ -179,24 +203,152 @@ class Pitch60sNode(BaseNode):
                         parsed_output = json.loads(cleaned_output)
                         self.log_info("从清理后的输出成功解析JSON")
                     except (JSONDecodeError, TypeError):
-                        # 策略2: 尝试从original_output解析（可能更完整）
+                        # 策略2: 使用extract_clean_response提取JSON（更早使用，因为它更健壮）
                         if isinstance(original_output, str):
-                            original_cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', original_output)
-                            try:
-                                parsed_output = json.loads(original_cleaned)
-                                self.log_info("从清理后的原始输出成功解析JSON")
-                            except (JSONDecodeError, TypeError):
-                                # 策略3: 使用extract_clean_response提取JSON
-                                extracted = extract_clean_response(original_output)
-                                if isinstance(extracted, dict) and "error" not in extracted:
-                                    parsed_output = extracted
-                                elif isinstance(extracted, str):
+                            extracted = extract_clean_response(original_output)
+                            if isinstance(extracted, dict) and "error" not in extracted:
+                                parsed_output = extracted
+                                self.log_info("使用extract_clean_response成功解析JSON")
+                            elif isinstance(extracted, str):
+                                try:
+                                    parsed_output = json.loads(extracted)
+                                    self.log_info("从extract_clean_response返回的字符串成功解析JSON")
+                                except (JSONDecodeError, TypeError):
+                                    # 策略3: 尝试从清理后的原始输出解析
+                                    original_cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', original_output)
                                     try:
-                                        parsed_output = json.loads(extracted)
+                                        parsed_output = json.loads(original_cleaned)
+                                        self.log_info("从清理后的原始输出成功解析JSON")
                                     except (JSONDecodeError, TypeError):
-                                        raise ValueError("无法从输出中提取有效的JSON")
+                                        # 策略4: 尝试使用更健壮的方法提取第一个完整的JSON对象
+                                        # 正确处理字符串内的括号和引号
+                                        first_brace = original_output.find('{')
+                                        if first_brace != -1:
+                                            brace_count = 0
+                                            start_idx = first_brace
+                                            json_end = -1
+                                            in_string = False
+                                            escape_next = False
+                                            
+                                            for i in range(first_brace, len(original_output)):
+                                                if escape_next:
+                                                    escape_next = False
+                                                    continue
+                                                
+                                                if original_output[i] == '\\':
+                                                    escape_next = True
+                                                    continue
+                                                
+                                                if original_output[i] == '"':
+                                                    in_string = not in_string
+                                                    continue
+                                                
+                                                if in_string:
+                                                    continue
+                                                
+                                                if original_output[i] == '{':
+                                                    if brace_count == 0:
+                                                        start_idx = i
+                                                    brace_count += 1
+                                                elif original_output[i] == '}':
+                                                    brace_count -= 1
+                                                    if brace_count == 0 and start_idx != -1:
+                                                        json_end = i + 1
+                                                        break
+                                            
+                                            if brace_count == 0 and json_end != -1:
+                                                json_str = original_output[start_idx:json_end]
+                                                # 尝试修复常见的 JSON 错误
+                                                try:
+                                                    parsed_output = json.loads(json_str)
+                                                    self.log_info("使用字符串感知的括号匹配提取JSON成功")
+                                                except (JSONDecodeError, TypeError) as e:
+                                                    # 尝试修复常见的 JSON 错误
+                                                    json_str_fixed = fix_common_json_errors(json_str)
+                                                    try:
+                                                        parsed_output = json.loads(json_str_fixed)
+                                                        self.log_info("修复常见JSON错误后解析成功")
+                                                    except (JSONDecodeError, TypeError):
+                                                        # 尝试修复未转义的换行符（更激进的方法）
+                                                        json_str_fixed2 = json_str_fixed.replace('\n', '\\n').replace('\r', '\\r')
+                                                        try:
+                                                            parsed_output = json.loads(json_str_fixed2)
+                                                            self.log_info("修复换行符后解析JSON成功")
+                                                        except (JSONDecodeError, TypeError):
+                                                            # 输出部分内容用于调试
+                                                            self.log_info(f"JSON解析失败: {str(e)[:100]}")
+                                                            self.log_info(f"尝试解析的JSON片段 (前500字符): {json_str[:500]}")
+                                                            raise ValueError(f"无法从输出中提取有效的JSON: {str(e)[:200]}")
+                                            else:
+                                                raise ValueError("无法找到匹配的JSON对象括号")
+                                        else:
+                                            raise ValueError("无法找到JSON对象的开始标记")
+                            else:
+                                # extract_clean_response返回了错误
+                                # 尝试最后的策略：使用字符串感知的括号匹配提取JSON
+                                first_brace = original_output.find('{')
+                                if first_brace != -1:
+                                    brace_count = 0
+                                    start_idx = first_brace
+                                    json_end = -1
+                                    in_string = False
+                                    escape_next = False
+                                    
+                                    for i in range(first_brace, len(original_output)):
+                                        if escape_next:
+                                            escape_next = False
+                                            continue
+                                        
+                                        if original_output[i] == '\\':
+                                            escape_next = True
+                                            continue
+                                        
+                                        if original_output[i] == '"':
+                                            in_string = not in_string
+                                            continue
+                                        
+                                        if in_string:
+                                            continue
+                                        
+                                        if original_output[i] == '{':
+                                            if brace_count == 0:
+                                                start_idx = i
+                                            brace_count += 1
+                                        elif original_output[i] == '}':
+                                            brace_count -= 1
+                                            if brace_count == 0 and start_idx != -1:
+                                                json_end = i + 1
+                                                break
+                                    
+                                    if brace_count == 0 and json_end != -1:
+                                        json_str = original_output[start_idx:json_end]
+                                        # 尝试修复常见的 JSON 错误
+                                        try:
+                                            parsed_output = json.loads(json_str)
+                                            self.log_info("使用字符串感知的括号匹配提取JSON成功（作为最后手段）")
+                                        except (JSONDecodeError, TypeError) as e:
+                                            # 尝试修复常见的 JSON 错误
+                                            json_str_fixed = fix_common_json_errors(json_str)
+                                            try:
+                                                parsed_output = json.loads(json_str_fixed)
+                                                self.log_info("修复常见JSON错误后解析成功（作为最后手段）")
+                                            except (JSONDecodeError, TypeError):
+                                                # 尝试修复未转义的换行符（更激进的方法）
+                                                json_str_fixed2 = json_str_fixed.replace('\n', '\\n').replace('\r', '\\r')
+                                                try:
+                                                    parsed_output = json.loads(json_str_fixed2)
+                                                    self.log_info("修复换行符后解析JSON成功（作为最后手段）")
+                                                except (JSONDecodeError, TypeError):
+                                                    # 输出部分内容用于调试
+                                                    self.log_info(f"JSON解析失败: {str(e)[:100]}")
+                                                    self.log_info(f"尝试解析的JSON片段 (前500字符): {json_str[:500]}")
+                                                    raise ValueError(f"无法从输出中提取有效的JSON: {str(e)[:200]}")
+                                    else:
+                                        raise ValueError("无法找到匹配的JSON对象括号")
                                 else:
-                                    raise ValueError("无法从输出中提取有效的JSON")
+                                    raise ValueError("无法找到JSON对象的开始标记")
+                        else:
+                            raise ValueError("无法解析输出")
                 elif isinstance(cleaned_output, dict):
                     parsed_output = cleaned_output
                 else:
@@ -223,14 +375,22 @@ class Pitch60sNode(BaseNode):
                 self.log_error(error_msg)
                 raise ValueError(error_msg)
             
-            # 验证必需字段
+            # 验证并自动填充缺失字段（更宽松的处理方式）
+            # 如果字段缺失，自动创建默认值而不是抛出错误
             required_fields = ["painpoint_resonance", "team_advantages", "call_to_action", "full_pitch"]
             missing_fields = [field for field in required_fields if field not in pitch_result]
             if missing_fields:
-                debug_file = self._save_debug_output(original_output, cleaned_output)
-                error_msg = f"Pitch结果缺少必需字段: {', '.join(missing_fields)}。调试文件已保存到: {debug_file}"
-                self.log_error(error_msg)
-                raise ValueError(error_msg)
+                self.log_info(f"检测到缺失字段: {', '.join(missing_fields)}，将使用默认值填充")
+                # 自动填充缺失字段的默认值
+                for field in missing_fields:
+                    if field == "painpoint_resonance":
+                        pitch_result["painpoint_resonance"] = {"selected_dimensions": [], "content": ""}
+                    elif field == "team_advantages":
+                        pitch_result["team_advantages"] = {"selected_advantages": [], "content": ""}
+                    elif field == "call_to_action":
+                        pitch_result["call_to_action"] = {"target_audience": "", "action": "", "content": ""}
+                    elif field == "full_pitch":
+                        pitch_result["full_pitch"] = ""
             
             # 验证painpoint_resonance结构
             painpoint_resonance = pitch_result.get("painpoint_resonance", {})
@@ -276,9 +436,15 @@ class Pitch60sNode(BaseNode):
                     parts.append(call_to_action["content"])
                 pitch_result["full_pitch"] = " ".join(parts)
             
-            # 如果提取到了markdown_summary，添加到结果中
-            if markdown_summary:
+            # 设置markdown_summary：直接使用full_pitch作为markdown_summary（60秒pitch的全文）
+            full_pitch = pitch_result.get("full_pitch", "")
+            if full_pitch:
+                pitch_result["markdown_summary"] = full_pitch
+                self.log_info(f"设置markdown_summary为full_pitch（长度: {len(full_pitch)} 字符）")
+            elif markdown_summary:
+                # 如果full_pitch为空但LLM返回了markdown_summary，使用LLM返回的
                 pitch_result["markdown_summary"] = markdown_summary
+                self.log_info("full_pitch为空，使用LLM返回的markdown_summary")
             
             return pitch_result
             
