@@ -694,6 +694,73 @@ class AihehuoClient:
         except Exception as e:
             print(f"获取想法详情错误: {str(e)}")
             return None
+    
+    def upload_file(
+        self,
+        file_path: str,
+        timeout: int = 60
+    ) -> Optional[Dict[str, Any]]:
+        """
+        上传文件到云存储
+        
+        Args:
+            file_path: 要上传的文件的本地绝对路径
+            timeout: 请求超时时间（秒），默认60秒
+            
+        Returns:
+            上传结果字典，包含文件URL等信息，如果失败则返回None
+        """
+        try:
+            # 验证文件是否存在
+            if not os.path.exists(file_path):
+                print(f"上传文件错误: 文件不存在 - {file_path}")
+                return None
+            
+            # 构建上传URL
+            url = f"{self.api_base}/micro/upload"
+            
+            # 获取文件名
+            filename = os.path.basename(file_path)
+            
+            # 确定MIME类型
+            import mimetypes
+            mime_type, _ = mimetypes.guess_type(file_path)
+            if mime_type is None:
+                mime_type = 'application/octet-stream'
+            
+            # 准备上传请求头（注意：multipart/form-data不需要Content-Type头，requests会自动设置）
+            upload_headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Accept": "application/json",
+                "User-Agent": "LLM_AGENT"
+            }
+            
+            # 使用multipart/form-data上传文件
+            with open(file_path, 'rb') as f:
+                files = {
+                    'file': (filename, f, mime_type)
+                }
+                
+                resp = requests.post(url, headers=upload_headers, files=files, timeout=timeout)
+            
+            resp.raise_for_status()
+            resp.encoding = 'utf-8'
+            response_data = resp.json()
+            
+            return response_data
+            
+        except requests.exceptions.RequestException as e:
+            print(f"上传文件错误: {str(e)}")
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    error_data = e.response.json()
+                    print(f"错误详情: {error_data}")
+                except:
+                    print(f"响应内容: {e.response.text[:200]}")
+            return None
+        except Exception as e:
+            print(f"上传文件错误: {str(e)}")
+            return None
 
 
 # 全局客户端实例
@@ -808,38 +875,6 @@ def get_user_info(
         return None
 
 
-def test_search_members(query: str = "寻找有创业经验的AI技术专家", per_page: int = 5):
-    """
-    测试成员搜索功能
-    
-    Args:
-        query: 测试查询
-        per_page: 每页结果数
-    """
-    print(f"\n=== 测试爱合伙成员搜索功能 ===")
-    print(f"搜索查询: {query}")
-    print(f"每页结果数: {per_page}")
-    
-    try:
-        results = search_members(query, per_page=per_page)
-        
-        if results:
-            print(f"\n找到 {len(results)} 个结果:")
-            for i, result in enumerate(results, 1):
-                print(f"\n结果 {i}:")
-                print(f"用户ID: {result['user_id']}")
-                print(f"姓名: {result['name']}")
-                if result.get('bio'):
-                    print(f"简介: {result['bio'][:100]}...")
-                if result.get('goal'):
-                    print(f"目标: {result['goal'][:100]}...")
-        else:
-            print("未找到搜索结果")
-            
-    except Exception as e:
-        print(f"搜索测试失败: {str(e)}")
-
-
 def get_idea_details(
     idea_id: str,
     api_key: Optional[str] = None,
@@ -875,71 +910,6 @@ def get_idea_details(
     except Exception as e:
         print(f"获取想法详情功能调用错误: {str(e)}")
         return None
-
-
-def test_get_idea_details(idea_id: str = "31009"):
-    """
-    测试想法/项目详情查询功能
-    
-    Args:
-        idea_id: 测试想法/项目ID
-    """
-    print(f"\n=== 测试爱合伙想法/项目详情查询功能 ===")
-    print(f"想法/项目ID: {idea_id}")
-    
-    try:
-        idea_details = get_idea_details(idea_id)
-        
-        if idea_details:
-            print(f"\n想法/项目详情:")
-            print(f"项目ID: {idea_details['idea_id']}")
-            print(f"标题: {idea_details['title']}")
-            if idea_details.get('description'):
-                print(f"描述: {idea_details['description'][:200]}...")
-            if idea_details.get('city'):
-                print(f"城市: {idea_details['city']}")
-            if idea_details.get('investment'):
-                print(f"投资额: {idea_details['investment']}")
-            if idea_details.get('team_members'):
-                print(f"团队规模: {idea_details['team_members']}")
-            if idea_details.get('partners_count'):
-                print(f"合伙人数量: {idea_details['partners_count']}")
-            if idea_details.get('all_skills'):
-                skills_names = [s.get('name', '') for s in idea_details['all_skills'][:10]]
-                print(f"所需技能: {', '.join(skills_names)}...")
-        else:
-            print("未找到想法/项目详情")
-            
-    except Exception as e:
-        print(f"想法/项目详情查询测试失败: {str(e)}")
-
-
-def test_get_user_info(user_id: str = "1"):
-    """
-    测试用户信息查询功能
-    
-    Args:
-        user_id: 测试用户ID
-    """
-    print(f"\n=== 测试爱合伙用户信息查询功能 ===")
-    print(f"用户ID: {user_id}")
-    
-    try:
-        user_info = get_user_info(user_id)
-        
-        if user_info:
-            print(f"\n用户信息:")
-            print(f"用户ID: {user_info['user_id']}")
-            print(f"姓名: {user_info['name']}")
-            if user_info.get('bio'):
-                print(f"简介: {user_info['bio'][:200]}...")
-            if user_info.get('goal'):
-                print(f"目标: {user_info['goal'][:200]}...")
-        else:
-            print("未找到用户信息")
-            
-    except Exception as e:
-        print(f"用户信息查询测试失败: {str(e)}")
 
 
 def search_ideas(
@@ -987,45 +957,37 @@ def search_ideas(
         return []
 
 
-def test_search_ideas(query: str = "AI创业项目", per_page: int = 5):
+def upload_file(
+    file_path: str,
+    api_key: Optional[str] = None,
+    api_base: Optional[str] = None,
+    timeout: int = 60
+) -> Optional[Dict[str, Any]]:
     """
-    测试创业想法搜索功能
+    便捷的文件上传函数
     
     Args:
-        query: 测试查询
-        per_page: 每页结果数
-    """
-    print(f"\n=== 测试爱合伙创业想法搜索功能 ===")
-    print(f"搜索查询: {query}")
-    print(f"每页结果数: {per_page}")
-    
-    try:
-        results = search_ideas(query, per_page=per_page)
+        file_path: 要上传的文件的本地绝对路径
+        api_key: API密钥，如果提供则使用此密钥，否则使用全局客户端
+        api_base: API基础URL，如果提供则使用此URL，否则使用全局客户端
+        timeout: 请求超时时间（秒），默认60秒
         
-        if results:
-            print(f"\n找到 {len(results)} 个结果:")
-            for i, result in enumerate(results, 1):
-                print(f"\n结果 {i}:")
-                print(f"项目ID: {result['idea_id']}")
-                print(f"标题: {result['title']}")
-                if result.get('city'):
-                    print(f"城市: {result['city']}")
-                if result.get('vertical'):
-                    print(f"行业: {result['vertical']}")
-                if result.get('investment'):
-                    print(f"投资额: {result['investment']}")
-                if result.get('team_members'):
-                    print(f"团队规模: {result['team_members']}")
+    Returns:
+        上传结果字典，包含文件URL等信息，如果失败则返回None
+    """
+    try:
+        if api_key or api_base:
+            # 使用提供的API密钥或URL创建临时客户端
+            client = AihehuoClient(api_key, api_base)
         else:
-            print("未找到搜索结果")
-            
+            # 使用全局客户端
+            client = get_aihehuo_client()
+        
+        result = client.upload_file(file_path, timeout=timeout)
+        return result
+        
     except Exception as e:
-        print(f"搜索测试失败: {str(e)}")
+        print(f"上传文件功能调用错误: {str(e)}")
+        return None
 
 
-if __name__ == "__main__":
-    # 运行测试
-    test_search_members()
-    test_get_user_info()
-    test_search_ideas()
-    test_get_idea_details()
