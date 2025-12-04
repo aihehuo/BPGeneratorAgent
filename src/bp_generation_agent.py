@@ -6,6 +6,9 @@ BP Generation Agent
 import os
 import traceback
 import uuid
+import time
+import threading
+import httpx
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
@@ -15,6 +18,8 @@ from .graph.workflow import create_bp_graph
 from .graph.chat_history import ChatHistoryManager
 from .utils.config import Config, load_config
 from .utils.text_processing import detect_language
+from .utils.i18n import translate_status_message
+from .tools.aihehuo import upload_file
 
 
 class BPGenerationAgent:
@@ -97,6 +102,8 @@ class BPGenerationAgent:
         output_file: Optional[str] = None,
         save_report: bool = True,
         session_id: Optional[str] = None,
+        callback_url: Optional[str] = None,
+        api_base_url: str = "http://localhost:8000",
     ) -> Dict[str, Any]:
         """
         生成BP结构、评估、Pitch和PPT；最终输出Markdown (基于 LangGraph 工作流)
@@ -106,6 +113,8 @@ class BPGenerationAgent:
             output_file: 指定输出Markdown文件路径（可选）
             save_report: 是否保存Markdown到文件
             session_id: Session ID（可选），如果未提供则自动生成
+            callback_url: 状态更新回调URL（可选），如果提供则使用 stream 模式并发送中间状态
+            api_base_url: API服务器基础URL，用于构建文件artifact URLs（默认: http://localhost:8000）
 
         Returns:
             包含输出文件路径、Markdown文本等信息的字典，包括：
@@ -161,12 +170,32 @@ class BPGenerationAgent:
         print("\n" + "=" * 60)
         print(f"Starting BP Generation for: {business_idea[:50]}...")
         print("=" * 60)
-        
+
         try:
-            final_state = graph.invoke(inputs)
+            if callback_url:
+                # Use stream mode with callbacks
+                print(f"Using stream mode with callback URL: {callback_url}")
+                final_state = self._execute_with_callbacks(
+                    graph, inputs, callback_url, session_id, business_idea,
+                    save_report, output_file, session_dir, api_base_url
+                )
+            else:
+                # Use invoke mode (original behavior)
+                print("Using invoke mode (no callbacks)")
+                final_state = graph.invoke(inputs)
         except Exception as exc:
             print(f"\n错误: 生成BP失败: {exc}")
             traceback.print_exc()
+            # Send error callback if callback_url is provided
+            if callback_url:
+                error_message = translate_status_message(business_idea, "generation_failed")
+                self._send_callback(
+                    callback_url,
+                    session_id,
+                    "error",
+                    f"{error_message}: {str(exc)}",
+                    error=traceback.format_exc()
+                )
             raise
         
         # Determine where workflow stopped
@@ -287,6 +316,7 @@ class BPGenerationAgent:
         output_path = None
         partner_report_path = None
         ppt_design_file = None
+        uploaded_urls = {}  # Store uploaded file URLs
         
         if save_report:
             output_path = output_file or self._build_default_filename(business_idea, session_id=session_id)
@@ -294,6 +324,13 @@ class BPGenerationAgent:
             with open(output_path, "w", encoding="utf-8") as f:
                 f.write(markdown_content)
             print(f"\n✓ Saved report to: {output_path}")
+            
+            # Upload main report file
+            if output_path and os.path.exists(output_path):
+                uploaded_url = self._upload_artifact_file(output_path)
+                if uploaded_url:
+                    uploaded_urls["markdown"] = uploaded_url
+                    print(f"✓ Main report uploaded: {uploaded_url}")
             
             # Save PPT Design
             if ppt_result and ppt_result.get("slides"):
@@ -303,6 +340,12 @@ class BPGenerationAgent:
                 if ppt_file_path:
                     ppt_design_file = ppt_file_path
                     print(f"✓ PPT design file saved: {ppt_file_path}")
+                    # Upload PPT design file
+                    if os.path.exists(ppt_file_path):
+                        uploaded_url = self._upload_artifact_file(ppt_file_path)
+                        if uploaded_url:
+                            uploaded_urls["ppt_design"] = uploaded_url
+                            print(f"✓ PPT design file uploaded: {uploaded_url}")
             
             # Save Partner Report
             if partner_search_result:
@@ -311,6 +354,28 @@ class BPGenerationAgent:
                 )
                 if partner_report_path:
                     print(f"✓ Partner report saved: {partner_report_path}")
+                    # Upload partner report file
+                    if os.path.exists(partner_report_path):
+                        uploaded_url = self._upload_artifact_file(partner_report_path)
+                        if uploaded_url:
+                            uploaded_urls["partner_report"] = uploaded_url
+                            print(f"✓ Partner report uploaded: {uploaded_url}")
+            
+            # Save HTML report if generated
+            html_file_path = None
+            html_result = final_state.get("html_result", {})
+            if html_result and html_result.get("html_content"):
+                html_file_path = self._save_html_file(business_idea, html_result, output_path)
+                if html_file_path:
+                    print(f"✓ HTML report saved: {html_file_path}")
+                    # Upload HTML file
+                    if os.path.exists(html_file_path):
+                        uploaded_url = self._upload_artifact_file(html_file_path)
+                        if uploaded_url:
+                            uploaded_urls["html"] = uploaded_url
+                            print(f"✓ HTML report uploaded: {uploaded_url}")
+        else:
+            html_file_path = None
         
         return {
             "output_file": output_path,
@@ -323,9 +388,11 @@ class BPGenerationAgent:
             "partner_search_result": partner_search_result,
             "partner_report_file": partner_report_path,
             "ppt_design_file": ppt_design_file,
+            "html_file": html_file_path,
             "session_id": session_id,
             "session_dir": session_dir if save_report else None,
             "input_completeness": completeness,
+            "uploaded_urls": uploaded_urls,
         }
 
     # ---------------------------------------------------------------------- #
@@ -890,8 +957,19 @@ class BPGenerationAgent:
                 content += f"**Found {partner_count} Partners**:\n\n"
                 for i, partner in enumerate(partner_results[:10], 1):
                     content += f"#### Partner {i}\n\n"
-                    content += f"- **User ID**: {partner.get('user_id', 'N/A')}\n"
-                    content += f"- **Name**: {partner.get('name', 'N/A')}\n"
+                    name = partner.get('name', 'N/A')
+                    profile_url = partner.get('profile_url')
+                    user_number = partner.get('user_number')
+                    
+                    # 显示姓名和个人主页链接
+                    if profile_url:
+                        content += f"- **Name**: [{name}]({profile_url})\n"
+                    else:
+                        content += f"- **Name**: {name}\n"
+                    
+                    # 显示创业号
+                    if user_number:
+                        content += f"- **User Number**: {user_number}\n"
                     if partner.get('age_range'):
                         content += f"- **Age Range**: {partner.get('age_range')}\n"
                     elif partner.get('age'):
@@ -901,7 +979,9 @@ class BPGenerationAgent:
                     if partner.get('bio'):
                         bio = partner.get('bio', '').strip()
                         if bio:
-                            content += f"- **Bio**: {bio}\n"
+                            # 处理换行：将换行符转换为Markdown格式（两个空格+换行）
+                            bio_formatted = bio.replace('\n', '  \n')
+                            content += f"- **Bio**: {bio_formatted}\n"
                     if partner.get('tags'):
                         tags = partner.get('tags', [])
                         if isinstance(tags, list):
@@ -921,8 +1001,19 @@ class BPGenerationAgent:
                 content += f"**Found {investor_count} Investors**:\n\n"
                 for i, investor in enumerate(investor_results[:10], 1):
                     content += f"#### Investor {i}\n\n"
-                    content += f"- **User ID**: {investor.get('user_id', 'N/A')}\n"
-                    content += f"- **Name**: {investor.get('name', 'N/A')}\n"
+                    name = investor.get('name', 'N/A')
+                    profile_url = investor.get('profile_url')
+                    user_number = investor.get('user_number')
+                    
+                    # 显示姓名和个人主页链接
+                    if profile_url:
+                        content += f"- **Name**: [{name}]({profile_url})\n"
+                    else:
+                        content += f"- **Name**: {name}\n"
+                    
+                    # 显示创业号
+                    if user_number:
+                        content += f"- **User Number**: {user_number}\n"
                     if investor.get('age_range'):
                         content += f"- **Age Range**: {investor.get('age_range')}\n"
                     elif investor.get('age'):
@@ -932,7 +1023,9 @@ class BPGenerationAgent:
                     if investor.get('bio'):
                         bio = investor.get('bio', '').strip()
                         if bio:
-                            content += f"- **Bio**: {bio}\n"
+                            # 处理换行：将换行符转换为Markdown格式（两个空格+换行）
+                            bio_formatted = bio.replace('\n', '  \n')
+                            content += f"- **Bio**: {bio_formatted}\n"
                     if investor.get('tags'):
                         tags = investor.get('tags', [])
                         if isinstance(tags, list):
@@ -952,8 +1045,19 @@ class BPGenerationAgent:
                 content += f"**找到 {partner_count} 个合伙人**:\n\n"
                 for i, partner in enumerate(partner_results[:10], 1):
                     content += f"#### 合伙人 {i}\n\n"
-                    content += f"- **用户ID**: {partner.get('user_id', 'N/A')}\n"
-                    content += f"- **姓名**: {partner.get('name', 'N/A')}\n"
+                    name = partner.get('name', 'N/A')
+                    profile_url = partner.get('profile_url')
+                    user_number = partner.get('user_number')
+                    
+                    # 显示姓名和个人主页链接
+                    if profile_url:
+                        content += f"- **姓名**: [{name}]({profile_url})\n"
+                    else:
+                        content += f"- **姓名**: {name}\n"
+                    
+                    # 显示创业号
+                    if user_number:
+                        content += f"- **创业号**: {user_number}\n"
                     if partner.get('age_range'):
                         content += f"- **年龄段**: {partner.get('age_range')}\n"
                     elif partner.get('age'):
@@ -963,7 +1067,9 @@ class BPGenerationAgent:
                     if partner.get('bio'):
                         bio = partner.get('bio', '').strip()
                         if bio:
-                            content += f"- **简介**: {bio}\n"
+                            # 处理换行：将换行符转换为Markdown格式（两个空格+换行）
+                            bio_formatted = bio.replace('\n', '  \n')
+                            content += f"- **简介**: {bio_formatted}\n"
                     if partner.get('tags'):
                         tags = partner.get('tags', [])
                         if isinstance(tags, list):
@@ -983,8 +1089,19 @@ class BPGenerationAgent:
                 content += f"**找到 {investor_count} 个投资人**:\n\n"
                 for i, investor in enumerate(investor_results[:10], 1):
                     content += f"#### 投资人 {i}\n\n"
-                    content += f"- **用户ID**: {investor.get('user_id', 'N/A')}\n"
-                    content += f"- **姓名**: {investor.get('name', 'N/A')}\n"
+                    name = investor.get('name', 'N/A')
+                    profile_url = investor.get('profile_url')
+                    user_number = investor.get('user_number')
+                    
+                    # 显示姓名和个人主页链接
+                    if profile_url:
+                        content += f"- **姓名**: [{name}]({profile_url})\n"
+                    else:
+                        content += f"- **姓名**: {name}\n"
+                    
+                    # 显示创业号
+                    if user_number:
+                        content += f"- **创业号**: {user_number}\n"
                     if investor.get('age_range'):
                         content += f"- **年龄段**: {investor.get('age_range')}\n"
                     elif investor.get('age'):
@@ -994,7 +1111,9 @@ class BPGenerationAgent:
                     if investor.get('bio'):
                         bio = investor.get('bio', '').strip()
                         if bio:
-                            content += f"- **简介**: {bio}\n"
+                            # 处理换行：将换行符转换为Markdown格式（两个空格+换行）
+                            bio_formatted = bio.replace('\n', '  \n')
+                            content += f"- **简介**: {bio_formatted}\n"
                     if investor.get('tags'):
                         tags = investor.get('tags', [])
                         if isinstance(tags, list):
@@ -1063,6 +1182,64 @@ class BPGenerationAgent:
             traceback.print_exc()
             return None
     
+    def _save_html_file(
+        self,
+        business_idea: str,
+        html_result: Dict[str, Any],
+        main_report_path: str,
+    ) -> Optional[str]:
+        """
+        保存HTML报告到单独的文件
+        
+        Args:
+            business_idea: 商业创意
+            html_result: HTML生成结果（包含html_content）
+            main_report_path: 主报告文件路径
+            
+        Returns:
+            HTML文件路径，如果失败则返回None
+        """
+        try:
+            # 基于主报告文件名生成HTML文件名
+            base_name = os.path.splitext(os.path.basename(main_report_path))[0]
+            report_dir = os.path.dirname(main_report_path)
+            
+            # 移除文件名中的"bp_structure_"前缀（如果存在）
+            if base_name.startswith("bp_structure_"):
+                base_name = base_name[len("bp_structure_"):]
+            
+            # 生成HTML文件名
+            html_file_path = os.path.join(report_dir, f"bp_report_{base_name}.html")
+            
+            print(f"\n[DEBUG] 准备保存HTML报告:")
+            print(f"  - 主报告路径: {main_report_path}")
+            print(f"  - HTML文件路径: {html_file_path}")
+            print(f"  - 目录存在: {os.path.exists(report_dir)}")
+            
+            html_content = html_result.get("html_content")
+            if not html_content:
+                print(f"  - 错误: HTML内容为空")
+                return None
+            
+            print(f"  - HTML内容长度: {len(html_content)} 字符")
+            
+            # 写入文件
+            print(f"  - 正在写入文件...")
+            with open(html_file_path, "w", encoding="utf-8") as f:
+                f.write(html_content)
+            
+            if os.path.exists(html_file_path):
+                file_size = os.path.getsize(html_file_path)
+                print(f"  - 文件已成功创建，大小: {file_size} 字节")
+                return html_file_path
+            else:
+                print(f"  - 错误: 文件创建后不存在!")
+                return None
+        except Exception as e:
+            print(f"保存HTML文件失败: {e}")
+            traceback.print_exc()
+            return None
+    
     def _build_partner_report_content(
         self,
         business_idea: str,
@@ -1104,13 +1281,62 @@ class BPGenerationAgent:
         
         return content
     
+    def _upload_artifact_file(self, file_path: str) -> Optional[str]:
+        """
+        Upload an artifact file to cloud storage and return the uploaded URL.
+        
+        Args:
+            file_path: Local file path to upload
+            
+        Returns:
+            Uploaded file URL if successful, None otherwise
+        """
+        if not self.config.aihehuo_api_key:
+            print(f"[文件上传] 跳过上传 {file_path}: API密钥未配置")
+            return None
+        
+        if not os.path.exists(file_path):
+            print(f"[文件上传] 跳过上传 {file_path}: 文件不存在")
+            return None
+        
+        try:
+            result = upload_file(
+                file_path,
+                api_key=self.config.aihehuo_api_key,
+                api_base=self.config.aihehuo_api_base
+            )
+            if result:
+                # Extract URL from response
+                file_url = None
+                if isinstance(result, dict):
+                    if "data" in result:
+                        data = result["data"]
+                        if isinstance(data, dict) and "url" in data:
+                            file_url = data["url"]
+                        elif isinstance(data, str):
+                            file_url = data
+                    elif "url" in result:
+                        file_url = result["url"]
+                
+                if file_url:
+                    return file_url
+                else:
+                    print(f"[文件上传] 上传成功但未找到URL: {result}")
+                    return None
+            else:
+                print(f"[文件上传] 上传失败: {file_path}")
+                return None
+        except Exception as e:
+            print(f"[文件上传] 上传异常: {file_path}, 错误: {str(e)}")
+            return None
+    
     def _calculate_age_range(self, age: int) -> str:
         """
         根据年龄计算年龄段
-        
+
         Args:
             age: 年龄
-            
+
         Returns:
             年龄段字符串
         """
@@ -1132,6 +1358,512 @@ class BPGenerationAgent:
             return "55-59岁"
         else:
             return "60岁以上"
+
+    # --------------------------------------------------------------------- #
+    # Callback 相关方法
+    # --------------------------------------------------------------------- #
+
+    def _send_callback(
+        self,
+        callback_url: str,
+        session_id: str,
+        status: str,
+        message: str,
+        artifacts: Optional[Dict[str, Any]] = None,
+        markdown_summary: Optional[str] = None,
+        error: Optional[str] = None,
+        max_retries: int = 2
+    ):
+        """
+        发送状态更新回调到提供的URL。
+        回调在单独的线程中发送以避免阻塞主生成过程。
+
+        Args:
+            callback_url: 发送回调的URL
+            session_id: Session ID
+            status: 状态字符串 (如 "started", "input_check", "structure_gen", "completed", "error")
+            message: 人类可读的状态消息
+            artifacts: 可选的 artifact URLs 字典
+            markdown_summary: 可选的节点执行返回的 markdown 摘要
+            error: 可选的错误消息
+            max_retries: 最大重试次数（默认: 2）
+        """
+        def _send_with_retry():
+            """在单独的线程中发送回调并带重试逻辑"""
+            payload = {
+                "session_id": session_id,
+                "status": status,
+                "message": message,
+                "timestamp": datetime.now().isoformat(),
+            }
+            if artifacts:
+                payload["artifacts"] = artifacts
+            if markdown_summary:
+                payload["markdown_summary"] = markdown_summary
+                print(f"[_send_callback] Including markdown_summary in payload (length: {len(markdown_summary)})")
+            else:
+                print(f"[_send_callback] WARNING: No markdown_summary to include in payload for status: {status}")
+            if error:
+                payload["error"] = error
+
+            # Debug: print payload keys for pitch_generation
+            if status == "pitch_generation":
+                print(f"[_send_callback] Payload keys for pitch_generation: {list(payload.keys())}")
+                print(f"[_send_callback] Has markdown_summary: {'markdown_summary' in payload}")
+
+            # Configure timeout: connect timeout (5s) + read timeout (10s)
+            timeout = httpx.Timeout(5.0, read=10.0)
+
+            for attempt in range(max_retries + 1):
+                try:
+                    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+                        response = client.post(callback_url, json=payload)
+                        response.raise_for_status()
+                        print(f"✓ Callback sent successfully to {callback_url} (after {attempt + 1} attempts)")
+                        return
+                except httpx.TimeoutException as e:
+                    error_msg = f"timeout after {timeout.connect_timeout + timeout.read_timeout}s"
+                    if attempt < max_retries:
+                        wait_time = (attempt + 1) * 1  # Exponential backoff: 1s, 2s
+                        print(f"⚠ Callback timeout to {callback_url} (attempt {attempt + 1}/{max_retries + 1}), retrying in {wait_time}s...")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        print(f"⚠ Failed to send callback to {callback_url}: {error_msg} (gave up after {max_retries + 1} attempts)")
+                except httpx.ConnectError as e:
+                    error_msg = f"connection error: {str(e)}"
+                    if attempt < max_retries:
+                        wait_time = (attempt + 1) * 1
+                        print(f"⚠ Callback connection error to {callback_url} (attempt {attempt + 1}/{max_retries + 1}), retrying in {wait_time}s...")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        print(f"⚠ Failed to send callback to {callback_url}: {error_msg} (gave up after {max_retries + 1} attempts)")
+                except httpx.HTTPStatusError as e:
+                    # HTTP error (4xx, 5xx) - don't retry
+                    print(f"⚠ Callback HTTP error {e.response.status_code} to {callback_url}: {e.response.text[:200]}")
+                    return
+                except Exception as e:
+                    error_msg = str(e)
+                    if attempt < max_retries:
+                        wait_time = (attempt + 1) * 1
+                        print(f"⚠ Callback error to {callback_url} (attempt {attempt + 1}/{max_retries + 1}): {error_msg}, retrying in {wait_time}s...")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        print(f"⚠ Failed to send callback to {callback_url}: {error_msg} (gave up after {max_retries + 1} attempts)")
+
+        # Send callback in a separate thread to avoid blocking
+        callback_thread = threading.Thread(target=_send_with_retry, daemon=True)
+        callback_thread.start()
+
+    def _extract_markdown_summary(self, node_name: str, node_state: Dict[str, Any]) -> Optional[str]:
+        """
+        根据刚执行的节点从节点状态中提取 markdown 摘要。
+
+        每个节点返回不同的结果，这些结果会合并到状态中。此函数根据节点类型
+        从适当的位置提取 markdown 摘要。
+
+        Args:
+            node_name: 刚执行的节点名称
+            node_state: 节点执行后的状态字典（包含合并后的状态）
+
+        Returns:
+            如果可用则返回 Markdown 摘要字符串，否则返回 None
+        """
+        result_map = {
+            "input_check": "input_completeness",
+            "structure_gen": "bp_structure",
+            "structure_regenerate": "bp_structure",
+            "structure_eval": "evaluation_result",
+            "painpoint_enhancement": "bp_structure",
+            "investor_eval": "bp_structure",
+            "pitch_gen": "pitch_result",
+            "ppt_gen": "ppt_result",
+            "partner_search": "partner_search_result",
+        }
+
+        result_key = result_map.get(node_name)
+        if result_key and result_key in node_state:
+            result = node_state.get(result_key)
+            if result is not None:
+                # Extract Markdown summary from node state if available
+                # For serial nodes (input_check, structure_gen, etc.), markdown_summary is at state top level
+                # For parallel nodes (pitch_gen, ppt_gen), markdown_summary is inside the result dict to avoid conflicts
+                # Try multiple locations to find markdown_summary:
+                # 1. Within the result dict (for parallel nodes like pitch_gen, ppt_gen)
+                # 2. Top level of node_state (for serial nodes)
+                markdown_summary = None
+                if isinstance(result, dict):
+                    markdown_summary = result.get("markdown_summary")
+                    if markdown_summary:
+                        print(f"[_extract_markdown_summary] Found markdown_summary in {result_key} for node {node_name}")
+
+                    # Special handling for pitch_gen: if no markdown_summary, use full_pitch
+                    if not markdown_summary and node_name == "pitch_gen" and "full_pitch" in result:
+                        full_pitch = result.get("full_pitch", "")
+                        if full_pitch:
+                            markdown_summary = full_pitch
+                            print(f"[_extract_markdown_summary] Using full_pitch as markdown_summary for pitch_gen (length: {len(full_pitch)})")
+
+                if not markdown_summary:
+                    markdown_summary = node_state.get("markdown_summary")
+                    if markdown_summary:
+                        print(f"[_extract_markdown_summary] Found markdown_summary at top level for node {node_name}")
+
+                if not markdown_summary:
+                    print(f"[_extract_markdown_summary] WARNING: No markdown_summary found for node {node_name} in {result_key}")
+                    if isinstance(result, dict):
+                        print(f"[_extract_markdown_summary] Available keys in {result_key}: {list(result.keys())}")
+
+                return markdown_summary
+
+        # If no specific result found, try top level
+        markdown_summary = node_state.get("markdown_summary")
+        if not markdown_summary:
+            print(f"[_extract_markdown_summary] WARNING: No markdown_summary found for node {node_name} (no result_key match)")
+            print(f"[_extract_markdown_summary] Available keys in node_state: {list(node_state.keys())}")
+        return markdown_summary
+
+    def _build_artifact_urls(
+        self,
+        session_id: str,
+        state: Dict[str, Any],
+        base_url: str = "http://localhost:8000",
+        include_intermediate: bool = False
+    ) -> Dict[str, str]:
+        """
+        从当前状态构建 artifact URLs。
+        优先使用上传的 URLs 而不是本地文件 URLs。
+
+        Args:
+            session_id: Session ID
+            state: 当前 workflow 状态
+            base_url: API 服务器的基础 URL
+            include_intermediate: 是否包含中间 artifacts（可能尚未保存为文件）
+
+        Returns:
+            Artifact 类型到 URL 的字典
+        """
+        artifacts = {}
+        uploaded_urls = state.get("uploaded_urls", {})
+
+        # Only include URLs for artifacts that are saved as files
+        # For intermediate states, we include them if include_intermediate is True
+        # but note that files may not exist yet
+
+        # Check for uploaded URLs first, then fall back to local URLs
+        if state.get("markdown_content") and state.get("output_file"):
+            # Prefer uploaded URL if available
+            if "markdown" in uploaded_urls:
+                artifacts["markdown"] = uploaded_urls["markdown"]
+            else:
+                # Fall back to local URL
+                output_file = state.get("output_file")
+                filename = os.path.basename(output_file)
+                artifacts["markdown"] = f"{base_url}/api/v1/files/{session_id}/{filename}"
+
+        if state.get("partner_report_file"):
+            # Prefer uploaded URL if available
+            if "partner_report" in uploaded_urls:
+                artifacts["partner_report"] = uploaded_urls["partner_report"]
+            else:
+                # Fall back to local URL
+                partner_file = state.get("partner_report_file")
+                filename = os.path.basename(partner_file)
+                artifacts["partner_report"] = f"{base_url}/api/v1/files/{session_id}/{filename}"
+
+        if state.get("ppt_design_file"):
+            # Prefer uploaded URL if available
+            if "ppt_design" in uploaded_urls:
+                artifacts["ppt_design"] = uploaded_urls["ppt_design"]
+            else:
+                # Fall back to local URL
+                ppt_file = state.get("ppt_design_file")
+                filename = os.path.basename(ppt_file)
+                artifacts["ppt_design"] = f"{base_url}/api/v1/files/{session_id}/{filename}"
+
+        # For intermediate artifacts that may not be saved as files yet,
+        # include them only if include_intermediate is True
+        # Note: These URLs may return 404 until files are actually saved
+        if include_intermediate:
+            if state.get("bp_structure"):
+                artifacts["bp_structure"] = f"{base_url}/api/v1/files/{session_id}/bp_structure.json"
+
+            if state.get("evaluation_result"):
+                artifacts["evaluation"] = f"{base_url}/api/v1/files/{session_id}/evaluation.json"
+
+            if state.get("pitch_result"):
+                artifacts["pitch"] = f"{base_url}/api/v1/files/{session_id}/pitch.json"
+
+            if state.get("ppt_result") and not state.get("ppt_design_file"):
+                artifacts["ppt"] = f"{base_url}/api/v1/files/{session_id}/ppt_design.json"
+
+            if state.get("partner_search_result") and not state.get("partner_report_file"):
+                artifacts["partner_search"] = f"{base_url}/api/v1/files/{session_id}/partner_report.md"
+        
+        # HTML report (always include if available, not just for intermediate)
+        # Check both html_file (saved file) and html_result (generated content)
+        html_file = state.get("html_file")
+        html_result = state.get("html_result", {})
+        has_html = html_file or (html_result and html_result.get("html_content"))
+        
+        if has_html:
+            # Prefer uploaded URL if available
+            if "html" in uploaded_urls:
+                artifacts["html"] = uploaded_urls["html"]
+            elif html_file:
+                # Fall back to local URL if file was saved
+                filename = os.path.basename(html_file)
+                artifacts["html"] = f"{base_url}/api/v1/files/{session_id}/{filename}"
+            elif html_result and html_result.get("html_content"):
+                # If HTML was generated but not saved, we can't provide a file URL
+                # But we can still indicate that HTML is available
+                # Note: This case should ideally save the file, but for now we skip it
+                # to avoid breaking existing behavior when save_report=False
+                pass
+
+        return artifacts
+
+    def _execute_with_callbacks(
+        self,
+        graph,
+        inputs: Dict[str, Any],
+        callback_url: str,
+        session_id: str,
+        business_idea: str,
+        save_report: bool,
+        output_file: Optional[str],
+        session_dir: Optional[str],
+        api_base_url: str
+    ) -> Dict[str, Any]:
+        """
+        使用 stream 模式执行 workflow 并发送 callbacks。
+
+        Args:
+            graph: LangGraph compiled graph
+            inputs: Initial state inputs
+            callback_url: Callback URL for status updates
+            session_id: Session ID
+            business_idea: Business idea
+            save_report: Whether to save reports
+            output_file: Optional output file path
+            session_dir: Optional session directory
+            api_base_url: API base URL for artifact URLs
+
+        Returns:
+            Final workflow state
+        """
+        # Send started callback
+        started_message = translate_status_message(business_idea, "started")
+        self._send_callback(callback_url, session_id, "started", started_message)
+
+        # Map node names to human-readable status keys
+        status_map = {
+            "input_check": "input_check",
+            "structure_gen": "structure_generation",
+            "structure_regenerate": "structure_regeneration",
+            "structure_eval": "structure_evaluation",
+            "painpoint_enhancement": "painpoint_enhancement",
+            "investor_eval": "investor_evaluation",
+            "pitch_gen": "pitch_generation",
+            "ppt_gen": "ppt_generation",
+            "partner_search": "partner_search",
+            "html_gen": "html_generation"
+        }
+
+        # Use stream() to get intermediate states
+        last_node = None
+        final_state = None
+
+        for event in graph.stream(inputs):
+            # event is a dict with node names as keys
+            for node_name, node_state in event.items():
+                # IMPORTANT: Extract markdown_summary from node_state BEFORE merging into final_state
+                # because node_state is the immediate output from the node that just executed,
+                # and it contains the markdown_summary at the top level. After merging into final_state,
+                # the markdown_summary might be lost if it's not in the AgentState TypedDict definition.
+                node_markdown_summary = node_state.get("markdown_summary")
+
+                # Update final_state with the latest state
+                if final_state is None:
+                    final_state = node_state.copy()
+                else:
+                    final_state.update(node_state)
+
+                if node_name != last_node:
+                    last_node = node_name
+
+                    # Map node name to status key
+                    status_key = status_map.get(node_name, node_name)
+
+                    # Translate message to match user's language
+                    message = translate_status_message(business_idea, status_key)
+
+                    # Extract markdown summary from node state
+                    # Use node_state to extract the immediate node output
+                    markdown_summary = self._extract_markdown_summary(node_name, node_state)
+
+                    # Use node_markdown_summary if we captured it from node_state (fallback)
+                    if not markdown_summary and node_markdown_summary:
+                        markdown_summary = node_markdown_summary
+
+                    # Debug logging for pitch_gen
+                    if node_name == "pitch_gen":
+                        print(f"[DEBUG] pitch_gen node_state keys: {list(node_state.keys())}")
+                        if "pitch_result" in node_state:
+                            pitch_result = node_state.get("pitch_result")
+                            if isinstance(pitch_result, dict):
+                                print(f"[DEBUG] pitch_result keys: {list(pitch_result.keys())}")
+                                print(f"[DEBUG] pitch_result has markdown_summary: {'markdown_summary' in pitch_result}")
+                                if "markdown_summary" in pitch_result:
+                                    print(f"[DEBUG] markdown_summary length: {len(pitch_result.get('markdown_summary', ''))}")
+                                if "full_pitch" in pitch_result:
+                                    print(f"[DEBUG] full_pitch length: {len(pitch_result.get('full_pitch', ''))}")
+                        print(f"[DEBUG] Extracted markdown_summary for pitch_gen: {markdown_summary is not None} (length: {len(markdown_summary) if markdown_summary else 0})")
+
+                    # Build artifact URLs from current merged state (include intermediate artifacts)
+                    artifacts = self._build_artifact_urls(session_id, final_state, api_base_url, include_intermediate=True)
+
+                    # Send callback with markdown summary
+                    self._send_callback(callback_url, session_id, status_key, message, artifacts, markdown_summary=markdown_summary)
+
+        # Ensure we have a final state
+        if final_state is None:
+            # Fallback: invoke if stream didn't work
+            final_state = graph.invoke(inputs)
+
+        # Check for errors (input completeness check)
+        completeness = final_state.get("input_completeness", {})
+        if completeness and not completeness.get("is_complete", False):
+            base_error_msg = translate_status_message(business_idea, "input_check_failed")
+            suggestions = completeness.get("suggestions", [])
+            if suggestions:
+                # Append suggestions in the same language (keep original format)
+                error_msg = f"{base_error_msg}: {', '.join(suggestions[:3])}"
+            else:
+                error_msg = base_error_msg
+            self._send_callback(
+                callback_url,
+                session_id,
+                "error",
+                error_msg,
+                error=error_msg
+            )
+            return final_state
+
+        # Continue with post-processing (markdown generation, file saving)
+        # Extract results from final state
+        bp_structure = final_state.get("bp_structure", [])
+        iteration_history = final_state.get("iteration_history", [])
+        evaluation_result = final_state.get("evaluation_result", {})
+        partner_search_result = final_state.get("partner_search_result")
+
+        # Build markdown
+        markdown_content = self._build_markdown(
+            business_idea,
+            bp_structure,
+            iteration_history,
+            evaluation_result,
+            partner_search_result
+        )
+
+        # Save files if needed (Agent will handle file uploads automatically)
+        output_path = None
+        uploaded_urls = {}  # Store uploaded file URLs from Agent
+
+        if save_report:
+            if not session_dir:
+                session_dir = self._get_session_dir(session_id)
+            os.makedirs(session_dir, exist_ok=True)
+
+            output_path = output_file or self._build_default_filename(business_idea, session_id=session_id)
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            with open(output_path, "w", encoding="utf-8") as f:
+                f.write(markdown_content)
+
+            # Upload main report file using Agent's method
+            if output_path and os.path.exists(output_path):
+                uploaded_url = self._upload_artifact_file(output_path)
+                if uploaded_url:
+                    uploaded_urls["markdown"] = uploaded_url
+                    print(f"[文件上传] 主报告已上传: {uploaded_url}")
+
+            # Save other artifacts and capture file paths
+            ppt_result = final_state.get("ppt_result")
+            if ppt_result and ppt_result.get("slides"):
+                ppt_file_path = self._save_ppt_design_file(business_idea, bp_structure, ppt_result, output_path)
+                if ppt_file_path:
+                    final_state["ppt_design_file"] = ppt_file_path
+                    # Upload PPT design file using Agent's method
+                    if os.path.exists(ppt_file_path):
+                        uploaded_url = self._upload_artifact_file(ppt_file_path)
+                        if uploaded_url:
+                            uploaded_urls["ppt_design"] = uploaded_url
+                            print(f"[文件上传] PPT设计文件已上传: {uploaded_url}")
+
+            if partner_search_result:
+                partner_report_path = self._save_partner_report(business_idea, partner_search_result, output_path)
+                if partner_report_path:
+                    final_state["partner_report_file"] = partner_report_path
+                    # Upload partner report file using Agent's method
+                    if os.path.exists(partner_report_path):
+                        uploaded_url = self._upload_artifact_file(partner_report_path)
+                        if uploaded_url:
+                            uploaded_urls["partner_report"] = uploaded_url
+                            print(f"[文件上传] 合伙人报告已上传: {uploaded_url}")
+        
+        # Save HTML report if generated
+        # Note: HTML should always be saved if generated, even if save_report=False,
+        # because we need to provide a URL for it in the artifacts
+        html_result = final_state.get("html_result", {})
+        if html_result and html_result.get("html_content"):
+            # If save_report=False, we still need to save HTML to provide a URL
+            # Use session_dir or create a temporary location
+            if not output_path:
+                if not session_dir:
+                    session_dir = self._get_session_dir(session_id)
+                os.makedirs(session_dir, exist_ok=True)
+                output_path = self._build_default_filename(business_idea, session_id=session_id)
+            
+            html_file_path = self._save_html_file(business_idea, html_result, output_path)
+            if html_file_path:
+                final_state["html_file"] = html_file_path
+                # Upload HTML file using Agent's method
+                if os.path.exists(html_file_path):
+                    uploaded_url = self._upload_artifact_file(html_file_path)
+                    if uploaded_url:
+                        uploaded_urls["html"] = uploaded_url
+                        print(f"[文件上传] HTML报告已上传: {uploaded_url}")
+
+        # Update final_state with file paths for artifact URL building
+        final_state["output_file"] = output_path if save_report else None
+        final_state["markdown_content"] = markdown_content
+        final_state["uploaded_urls"] = uploaded_urls  # Store uploaded URLs
+
+        # Build final artifact URLs (use uploaded URLs if available, otherwise use local URLs)
+        final_artifacts = self._build_artifact_urls(session_id, final_state, api_base_url, include_intermediate=False)
+        
+        # Debug: print artifacts for troubleshooting
+        print(f"[_execute_with_callbacks] Final artifacts keys: {list(final_artifacts.keys())}")
+        print(f"[_execute_with_callbacks] Final artifacts: {final_artifacts}")
+        print(f"[_execute_with_callbacks] final_state has html_file: {bool(final_state.get('html_file'))}")
+        print(f"[_execute_with_callbacks] final_state has html_result: {bool(final_state.get('html_result'))}")
+        print(f"[_execute_with_callbacks] uploaded_urls: {final_state.get('uploaded_urls', {})}")
+
+        # Translate completion message
+        completed_message = translate_status_message(business_idea, "completed")
+
+        # Send completion callback
+        self._send_callback(
+            callback_url,
+            session_id,
+            "completed",
+            completed_message,
+            artifacts=final_artifacts
+        )
+
+        return final_state
 
 
 def create_bp_agent(config_file: Optional[str] = None) -> BPGenerationAgent:

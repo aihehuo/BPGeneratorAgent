@@ -9,6 +9,7 @@ from .nodes.input import InputNode
 from .nodes.structure import StructureNode
 from .nodes.evaluation import EvaluationNode, PainpointNode, InvestorEvaluationWrapperNode
 from .nodes.production import ProductionNodes
+from .nodes.html_generation import HTMLGenerationNode
 
 def create_bp_graph(
     llm: BaseChatModel, 
@@ -34,6 +35,7 @@ def create_bp_graph(
     painpoint_node = PainpointNode(llm, chat_history_manager=chat_history_manager)
     investor_node = InvestorEvaluationWrapperNode(llm, chat_history_manager=chat_history_manager)
     production_nodes = ProductionNodes(llm, aihehuo_api_key, aihehuo_api_base, chat_history_manager=chat_history_manager)
+    html_node = HTMLGenerationNode(chat_history_manager=chat_history_manager)
     
     # Initialize Graph
     workflow = StateGraph(AgentState)
@@ -49,6 +51,7 @@ def create_bp_graph(
     workflow.add_node("pitch_gen", production_nodes.generate_pitch)
     workflow.add_node("ppt_gen", production_nodes.generate_ppt)
     workflow.add_node("partner_search", production_nodes.search_partners)
+    workflow.add_node("html_gen", html_node)
     
     # Define Edges
     workflow.set_entry_point("input_check")
@@ -103,9 +106,14 @@ def create_bp_graph(
     workflow.add_edge("investor_eval", "ppt_gen")
     workflow.add_edge("investor_eval", "partner_search")
     
-    workflow.add_edge("pitch_gen", END)
-    workflow.add_edge("ppt_gen", END)
-    workflow.add_edge("partner_search", END)
+    # After all production nodes complete, generate HTML report
+    # Use a conditional edge to wait for all three nodes to complete
+    workflow.add_edge("pitch_gen", "html_gen")
+    workflow.add_edge("ppt_gen", "html_gen")
+    workflow.add_edge("partner_search", "html_gen")
+    
+    # HTML generation is the final step
+    workflow.add_edge("html_gen", END)
     
     return workflow.compile()
 

@@ -5,6 +5,7 @@
 """
 
 import os
+import re
 import requests
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
@@ -57,6 +58,8 @@ class MemberResult:
     wechat_reachable: Optional[bool] = None
     age: Optional[int] = None
     age_range: Optional[str] = None
+    profile_url: Optional[str] = None  # 个人主页链接
+    user_number: Optional[str] = None  # 创业号
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典格式"""
@@ -68,7 +71,9 @@ class MemberResult:
             "tags": self.tags,
             "wechat_reachable": self.wechat_reachable,
             "age": self.age,
-            "age_range": self.age_range
+            "age_range": self.age_range,
+            "profile_url": self.profile_url,
+            "user_number": self.user_number
         }
 
 
@@ -208,8 +213,7 @@ class AihehuoClient:
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": "LLM_AGENT"
+            "Accept": "application/json"
         }
     
     def search_members(
@@ -270,76 +274,70 @@ class AihehuoClient:
             resp.encoding = 'utf-8'
             response_data = resp.json()
             
-            # API返回格式: {"data": "text formatted data", "meta": "..."}
-            # data字段包含文本格式的用户信息，用"---"分隔
-            text_data = response_data.get("data", "")
+            # API现在直接返回JSON格式的数据
+            # 响应格式: {"data": [{"id": 320650, "number": 9520650, "name": "...", ...}, ...], "meta": {...}}
+            data = response_data.get("data", [])
             
-            # 解析文本格式的结果
+            # 如果data是字符串（向后兼容旧格式），返回空列表
+            if isinstance(data, str):
+                print("警告: API返回了文本格式的数据，但期望JSON格式")
+                return []
+            
+            # 解析JSON格式的结果
             results = []
-            if text_data:
-                # 按"---"分割不同的用户记录
-                user_blocks = text_data.split("---")
-                
-                for block in user_blocks:
-                    block = block.strip()
-                    if not block:
+            if isinstance(data, list):
+                for user_data in data:
+                    if not isinstance(user_data, dict):
                         continue
                     
-                    # 解析文本块提取用户信息
-                    user_info = {}
-                    lines = block.split("\n")
+                    # 直接从JSON中提取字段
+                    user_id = str(user_data.get("id", ""))
+                    user_number = str(user_data.get("number", "")) if user_data.get("number") else None
+                    name = user_data.get("name", "")
                     
-                    for line in lines:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        
-                        # 解析键值对格式: "键: 值"
-                        if ":" in line:
-                            key, value = line.split(":", 1)
-                            key = key.strip()
-                            value = value.strip()
-                            
-                            if key == "用户ID":
-                                user_info["user_id"] = value
-                            elif key == "用户名":
-                                user_info["name"] = value
-                            elif key == "个人简介" or key.startswith("个人简介"):
-                                # 个人简介可能跨多行，需要特殊处理
-                                user_info["bio"] = value
-                            elif key == "AI印象标签":
-                                # 标签可能是逗号分隔的
-                                user_info["tags"] = [t.strip() for t in value.split(",") if t.strip()]
-                            elif key == "年龄段":
-                                # 直接使用API返回的年龄段，如"80后"、"90后"等
-                                user_info["age_range"] = value.strip()
-                            elif key == "年龄" or key == "出生日期" or key == "生日":
-                                # 提取年龄信息
-                                age = self._extract_age(value)
-                                if age:
-                                    user_info["age"] = age
-                                    # 如果已经有年龄段，就不重新计算
-                                    if not user_info.get("age_range"):
-                                        user_info["age_range"] = self._calculate_age_range(age)
+                    # 如果用户名为空，跳过
+                    if not name and not user_id:
+                        continue
                     
-                    # 如果简介中包含年龄信息，也尝试提取（只有在没有年龄段的情况下）
-                    if not user_info.get("age_range") and not user_info.get("age") and user_info.get("bio"):
-                        age = self._extract_age_from_bio(user_info["bio"])
-                        if age:
-                            user_info["age"] = age
-                            user_info["age_range"] = self._calculate_age_range(age)
+                    # 提取bio（简介）
+                    bio = user_data.get("bio", "")
                     
-                    # 如果提取到了基本信息，创建结果对象
-                    if user_info.get("user_id") or user_info.get("name"):
-                        result = MemberResult(
-                            user_id=str(user_info.get("user_id", "")),
-                            name=user_info.get("name", ""),
-                            bio=user_info.get("bio"),
-                            tags=user_info.get("tags"),
-                            age=user_info.get("age"),
-                            age_range=user_info.get("age_range")
-                        )
-                        results.append(result)
+                    # 提取tags（从skills数组中提取name字段）
+                    tags = []
+                    skills = user_data.get("skills", [])
+                    if isinstance(skills, list):
+                        tags = [skill.get("name", "") for skill in skills if isinstance(skill, dict) and skill.get("name")]
+                    
+                    # 提取年龄段（从skills中查找包含"后"的标签，如"80后"、"90后"）
+                    age_range = None
+                    for skill in skills:
+                        if isinstance(skill, dict):
+                            skill_name = skill.get("name", "")
+                            # 使用正则表达式匹配"数字+后"格式，如"80后"、"90后"
+                            if skill_name and re.match(r'^\d+[后年代]', skill_name):
+                                age_range = skill_name
+                                break
+                    
+                    # 提取年龄（如果description中包含年龄信息，可以尝试提取，但通常从skills中获取年龄段更准确）
+                    age = None
+                    # 暂时不提取具体年龄，因为JSON中没有直接提供
+                    
+                    # 构建个人主页链接（基于user_id）
+                    profile_url = None
+                    if user_number:
+                        profile_url = f"https://www.aihehuo.com/users/{user_number}"
+                    
+                    result = MemberResult(
+                        user_id=user_id,
+                        name=name,
+                        bio=bio,
+                        tags=tags if tags else None,
+                        age=age,
+                        age_range=age_range,
+                        profile_url=profile_url,
+                        user_number=user_number
+                    )
+                    results.append(result)
             
             return results
             
@@ -725,14 +723,32 @@ class AihehuoClient:
             # 确定MIME类型
             import mimetypes
             mime_type, _ = mimetypes.guess_type(file_path)
+            
+            # 处理mimetypes无法识别的文件类型
             if mime_type is None:
-                mime_type = 'application/octet-stream'
+                # 根据文件扩展名手动设置MIME类型
+                file_ext = os.path.splitext(file_path)[1].lower()
+                mime_type_map = {
+                    '.md': 'text/markdown',
+                    '.markdown': 'text/markdown',
+                    '.txt': 'text/plain',
+                    '.html': 'text/html',
+                    '.htm': 'text/html',
+                    '.json': 'application/json',
+                    '.xml': 'application/xml',
+                    '.pdf': 'application/pdf',
+                    '.png': 'image/png',
+                    '.jpg': 'image/jpeg',
+                    '.jpeg': 'image/jpeg',
+                    '.gif': 'image/gif',
+                    '.svg': 'image/svg+xml',
+                }
+                mime_type = mime_type_map.get(file_ext, 'application/octet-stream')
             
             # 准备上传请求头（注意：multipart/form-data不需要Content-Type头，requests会自动设置）
             upload_headers = {
                 "Authorization": f"Bearer {self.api_key}",
-                "Accept": "application/json",
-                "User-Agent": "LLM_AGENT"
+                "Accept": "application/json"
             }
             
             # 使用multipart/form-data上传文件

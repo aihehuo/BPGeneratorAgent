@@ -76,6 +76,32 @@ class CallbackHandler(BaseHTTPRequestHandler):
                     print(f"\n⚠️  Markdown Summary Missing")
                     print(f"   Status: {status} should have markdown_summary but it's missing")
             
+            # Validate artifacts if present (especially HTML URL)
+            artifacts = data.get('artifacts')
+            if artifacts:
+                print(f"\n📦 Artifacts received:")
+                for artifact_type, artifact_url in artifacts.items():
+                    print(f"   - {artifact_type}: {artifact_url}")
+                    
+                    # Special validation for HTML URL
+                    if artifact_type == "html" or artifact_type == "html_report":
+                        html_url = artifact_url
+                        print(f"\n🔍 Validating HTML URL...")
+                        print(f"   URL: {html_url}")
+                        
+                        # Validate URL format
+                        if isinstance(html_url, str) and (html_url.startswith("http://") or html_url.startswith("https://")):
+                            print(f"   ✅ URL format is valid")
+                            
+                            # Check if URL is accessible
+                            is_accessible = check_url_accessibility(html_url)
+                            if is_accessible:
+                                print(f"   ✅ HTML URL is accessible")
+                            else:
+                                print(f"   ⚠️  HTML URL may not be accessible (check network or server)")
+                        else:
+                            print(f"   ❌ URL format is invalid")
+            
             # Send response
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
@@ -95,16 +121,54 @@ class CallbackHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Callback server is running")
 
 
-# Nodes that should return markdown_summary in their intermediate results
+def check_url_accessibility(url: str, timeout: int = 10) -> bool:
+    """
+    Check if a URL is accessible by making a HEAD request.
+    
+    Args:
+        url: URL to check
+        timeout: Request timeout in seconds
+        
+    Returns:
+        True if URL is accessible, False otherwise
+    """
+    try:
+        response = requests.head(url, timeout=timeout, allow_redirects=True)
+        # Consider 2xx and 3xx status codes as accessible
+        is_accessible = 200 <= response.status_code < 400
+        
+        if is_accessible:
+            content_length = response.headers.get('Content-Length', 'unknown')
+            content_type = response.headers.get('Content-Type', 'unknown')
+            print(f"      Status: {response.status_code}, Content-Type: {content_type}, Size: {content_length}")
+        else:
+            print(f"      Status: {response.status_code} (not accessible)")
+        
+        return is_accessible
+    except requests.exceptions.Timeout:
+        print(f"      ⚠️  Timeout after {timeout}s")
+        return False
+    except requests.exceptions.ConnectionError:
+        print(f"      ⚠️  Connection error (URL may not be reachable)")
+        return False
+    except Exception as e:
+        print(f"      ⚠️  Error checking URL: {str(e)}")
+        return False
+
+
+# Status values that should return markdown_summary in their callbacks
+# Note: These are the actual status values sent in callbacks, not node names
+# The status values are mapped from node names in BPGenerationAgent._execute_with_callbacks
 NODES_WITH_MARKDOWN_SUMMARY = {
-    "input_check",
-    "structure_gen",
-    "structure_regenerate",
-    "structure_eval",
-    "painpoint_enhancement",
-    "investor_eval",
-    "pitch_gen",
-    "ppt_gen"
+    "input_check",              # from input_check node
+    "structure_generation",     # from structure_gen node
+    "structure_regeneration",   # from structure_regenerate node
+    "structure_evaluation",     # from structure_eval node
+    "painpoint_enhancement",    # from painpoint_enhancement node
+    "investor_evaluation",      # from investor_eval node
+    "pitch_generation",         # from pitch_gen node
+    "ppt_generation",           # from ppt_gen node
+    "partner_search"            # from partner_search node
 }
 
 
@@ -585,7 +649,66 @@ def print_summary(lang_code: str = None):
         else:
             print(f"  ⚠️  Found {len(markdown_summary_issues)} markdown_summary issues:")
             for issue in markdown_summary_issues:
-                print(f"     - Callback #{issue['callback']} ({issue['node']}): {', '.join(issue['issues'])}")
+                print(f"     - Callback #{issue['callback']} ({issue['status']}): {', '.join(issue['issues'])}")
+        
+        # Validate artifacts, especially HTML URL
+        print("-" * 60)
+        print(f"Artifacts Validation:")
+        html_urls_found = []
+        all_artifacts_valid = True
+        
+        for cb in CallbackHandler.callbacks_received:
+            artifacts = cb.get("artifacts")
+            if artifacts:
+                status = cb.get("status", "unknown")
+                
+                # Check for HTML URL
+                html_url = artifacts.get("html") or artifacts.get("html_report")
+                if html_url:
+                    html_urls_found.append({
+                        "status": status,
+                        "url": html_url
+                    })
+                    
+                    # Validate HTML URL format
+                    if not isinstance(html_url, str) or not (html_url.startswith("http://") or html_url.startswith("https://")):
+                        all_artifacts_valid = False
+                        print(f"  ❌ Invalid HTML URL format in {status} callback: {html_url}")
+        
+        if html_urls_found:
+            print(f"  ✅ Found {len(html_urls_found)} HTML URL(s) in callbacks:")
+            for html_info in html_urls_found:
+                print(f"     - {html_info['status']}: {html_info['url']}")
+            
+            # Check accessibility of the last HTML URL (from completed callback)
+            completed_callbacks = [cb for cb in CallbackHandler.callbacks_received if cb.get("status") == "completed"]
+            if completed_callbacks:
+                completed_artifacts = completed_callbacks[0].get("artifacts", {})
+                completed_html_url = completed_artifacts.get("html") or completed_artifacts.get("html_report")
+                if completed_html_url:
+                    print(f"\n  🔍 Checking HTML URL accessibility...")
+                    print(f"     URL: {completed_html_url}")
+                    is_accessible = check_url_accessibility(completed_html_url)
+                    if is_accessible:
+                        print(f"     ✅ HTML URL is accessible and returns valid content")
+                        all_artifacts_valid = all_artifacts_valid and True
+                    else:
+                        print(f"     ⚠️  HTML URL may not be accessible")
+                        all_artifacts_valid = False
+                else:
+                    print(f"  ⚠️  No HTML URL found in completed callback artifacts")
+                    all_artifacts_valid = False
+            else:
+                print(f"  ⚠️  No completed callback found to validate HTML URL")
+                all_artifacts_valid = False
+        else:
+            print(f"  ⚠️  No HTML URL found in any callback artifacts")
+            all_artifacts_valid = False
+        
+        if all_artifacts_valid and html_urls_found:
+            print(f"\n  ✅ All artifacts (including HTML URL) are valid and accessible")
+        elif html_urls_found:
+            print(f"\n  ⚠️  Some artifacts validation issues found")
         
         print()
 

@@ -243,11 +243,19 @@ class PartnerSearchNode(BaseNode):
                             for i, partner in enumerate(partner_results[:3], 1):
                                 name = partner.get("name", partner.get("nickname", "Unknown"))
                                 bio = partner.get("bio", partner.get("goal", ""))
+                                profile_url = partner.get("profile_url")
+                                
+                                # 构建显示文本，包含个人主页链接（如果有）
+                                if profile_url:
+                                    name_with_link = f"[{name}]({profile_url})"
+                                else:
+                                    name_with_link = name
+                                
                                 if bio:
                                     bio_preview = bio[:50] + "..." if len(bio) > 50 else bio
-                                    summary_parts.append(f"  {i}. {name}: {bio_preview}")
+                                    summary_parts.append(f"  {i}. {name_with_link}: {bio_preview}")
                                 else:
-                                    summary_parts.append(f"  {i}. {name}")
+                                    summary_parts.append(f"  {i}. {name_with_link}")
                     else:
                         summary_parts.append("- No partners found matching the criteria")
                 else:
@@ -264,11 +272,19 @@ class PartnerSearchNode(BaseNode):
                             for i, investor in enumerate(investor_results[:3], 1):
                                 name = investor.get("name", investor.get("nickname", "Unknown"))
                                 bio = investor.get("bio", investor.get("goal", ""))
+                                profile_url = investor.get("profile_url")
+                                
+                                # 构建显示文本，包含个人主页链接（如果有）
+                                if profile_url:
+                                    name_with_link = f"[{name}]({profile_url})"
+                                else:
+                                    name_with_link = name
+                                
                                 if bio:
                                     bio_preview = bio[:50] + "..." if len(bio) > 50 else bio
-                                    summary_parts.append(f"  {i}. {name}: {bio_preview}")
+                                    summary_parts.append(f"  {i}. {name_with_link}: {bio_preview}")
                                 else:
-                                    summary_parts.append(f"  {i}. {name}")
+                                    summary_parts.append(f"  {i}. {name_with_link}")
                     else:
                         summary_parts.append("- No investors found matching the criteria")
                 else:
@@ -287,11 +303,19 @@ class PartnerSearchNode(BaseNode):
                             for i, partner in enumerate(partner_results[:3], 1):
                                 name = partner.get("name", partner.get("nickname", "未知"))
                                 bio = partner.get("bio", partner.get("goal", ""))
+                                profile_url = partner.get("profile_url")
+                                
+                                # 构建显示文本，包含个人主页链接（如果有）
+                                if profile_url:
+                                    name_with_link = f"[{name}]({profile_url})"
+                                else:
+                                    name_with_link = name
+                                
                                 if bio:
                                     bio_preview = bio[:50] + "..." if len(bio) > 50 else bio
-                                    summary_parts.append(f"  {i}. {name}：{bio_preview}")
+                                    summary_parts.append(f"  {i}. {name_with_link}：{bio_preview}")
                                 else:
-                                    summary_parts.append(f"  {i}. {name}")
+                                    summary_parts.append(f"  {i}. {name_with_link}")
                     else:
                         summary_parts.append("- 未找到符合条件的合伙人")
                 else:
@@ -308,11 +332,19 @@ class PartnerSearchNode(BaseNode):
                             for i, investor in enumerate(investor_results[:3], 1):
                                 name = investor.get("name", investor.get("nickname", "未知"))
                                 bio = investor.get("bio", investor.get("goal", ""))
+                                profile_url = investor.get("profile_url")
+                                
+                                # 构建显示文本，包含个人主页链接（如果有）
+                                if profile_url:
+                                    name_with_link = f"[{name}]({profile_url})"
+                                else:
+                                    name_with_link = name
+                                
                                 if bio:
                                     bio_preview = bio[:50] + "..." if len(bio) > 50 else bio
-                                    summary_parts.append(f"  {i}. {name}：{bio_preview}")
+                                    summary_parts.append(f"  {i}. {name_with_link}：{bio_preview}")
                                 else:
-                                    summary_parts.append(f"  {i}. {name}")
+                                    summary_parts.append(f"  {i}. {name_with_link}")
                     else:
                         summary_parts.append("- 未找到符合条件的投资人")
                 else:

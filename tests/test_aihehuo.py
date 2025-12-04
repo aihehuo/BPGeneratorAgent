@@ -7,6 +7,8 @@ import unittest
 import os
 import sys
 import tempfile
+import requests
+from urllib.parse import urlparse
 
 # 添加项目根目录到Python路径
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -190,46 +192,159 @@ class TestAihehuoTools(unittest.TestCase):
                 raise
     
     def test_upload_file(self):
-        """测试文件上传功能"""
+        """测试文件上传功能（包括TXT、Markdown和HTML文件）"""
         print(f"\n=== 测试爱合伙文件上传功能 ===")
         
-        # 创建临时测试文件
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
-            test_file_path = f.name
-            f.write("这是一个测试文件\n用于测试文件上传功能")
+        # 定义要测试的文件类型和内容
+        test_files = [
+            {
+                "suffix": ".txt",
+                "content": "这是一个测试文件\n用于测试文件上传功能",
+                "name": "文本文件"
+            },
+            {
+                "suffix": ".md",
+                "content": """# 测试Markdown文件
+
+这是一个测试用的Markdown文件。
+
+## 功能列表
+
+- 测试Markdown格式
+- 验证文件上传
+- 检查URL返回
+
+## 代码示例
+
+```python
+def hello():
+    print("Hello, World!")
+```
+
+**注意**: 这是一个测试文件。
+""",
+                "name": "Markdown文件"
+            },
+            {
+                "suffix": ".html",
+                "content": """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>测试HTML文件</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1 {
+            color: #333;
+        }
+        .content {
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+    <h1>测试HTML文件上传</h1>
+    <div class="content">
+        <p>这是一个测试用的HTML文件。</p>
+        <p>用于验证文件上传功能对HTML格式的支持。</p>
+        <ul>
+            <li>测试HTML格式</li>
+            <li>验证文件上传</li>
+            <li>检查URL返回</li>
+        </ul>
+    </div>
+</body>
+</html>""",
+                "name": "HTML文件"
+            }
+        ]
+        
+        uploaded_urls = []
+        test_file_paths = []
         
         try:
-            print(f"文件路径: {test_file_path}")
-            
-            result = upload_file(test_file_path)
-            
-            if result:
-                print(f"\n上传成功:")
-                print(f"响应数据: {result}")
-                # 尝试提取文件URL
-                file_url = None
-                if isinstance(result, dict):
-                    if "data" in result:
-                        data = result["data"]
-                        if isinstance(data, dict) and "url" in data:
-                            file_url = data['url']
-                        elif isinstance(data, str):
-                            file_url = data
-                    elif "url" in result:
-                        file_url = result['url']
+            for test_file_info in test_files:
+                print(f"\n--- 测试上传{test_file_info['name']} ---")
                 
-                if file_url:
-                    print(f"文件URL: {file_url}")
-                    # 验证URL格式
-                    self.assertIsInstance(file_url, str)
-                    self.assertTrue(file_url.startswith('http://') or file_url.startswith('https://'))
+                # 创建临时测试文件
+                with tempfile.NamedTemporaryFile(mode='w', suffix=test_file_info['suffix'], delete=False, encoding='utf-8') as f:
+                    test_file_path = f.name
+                    f.write(test_file_info['content'])
+                    test_file_paths.append(test_file_path)
+                
+                print(f"文件路径: {test_file_path}")
+                print(f"文件类型: {test_file_info['suffix']}")
+                
+                result = upload_file(test_file_path)
+                
+                if result:
+                    print(f"上传成功:")
+                    print(f"响应数据: {result}")
+                    
+                    # 尝试提取文件URL
+                    file_url = None
+                    if isinstance(result, dict):
+                        if "data" in result:
+                            data = result["data"]
+                            if isinstance(data, dict) and "url" in data:
+                                file_url = data['url']
+                            elif isinstance(data, str):
+                                file_url = data
+                        elif "url" in result:
+                            file_url = result['url']
+                    
+                    if file_url:
+                        print(f"文件URL: {file_url}")
+                        uploaded_urls.append({
+                            "type": test_file_info['name'],
+                            "url": file_url,
+                            "suffix": test_file_info['suffix']
+                        })
+                        
+                        # 验证URL格式
+                        self.assertIsInstance(file_url, str)
+                        self.assertTrue(file_url.startswith('http://') or file_url.startswith('https://'))
+                        print(f"✓ {test_file_info['name']}上传成功，URL: {file_url}")
+                        
+                        # 验证URL可以正常访问
+                        try:
+                            print(f"  正在验证URL可访问性...")
+                            response = requests.get(file_url, timeout=10, allow_redirects=True)
+                            response.raise_for_status()
+                            
+                            # 验证状态码
+                            self.assertIn(response.status_code, [200, 201, 202], 
+                                        f"URL应该返回成功状态码，但返回了 {response.status_code}")
+                            
+                            # 验证内容长度
+                            content_length = len(response.content)
+                            self.assertGreater(content_length, 0, "URL返回的内容不应该为空")
+                            
+                            # 验证Content-Type（如果存在）
+                            content_type = response.headers.get('Content-Type', '')
+                            if content_type:
+                                print(f"  Content-Type: {content_type}")
+                            
+                            print(f"  ✓ URL可访问，状态码: {response.status_code}, 内容大小: {content_length} 字节")
+                            
+                        except requests.exceptions.RequestException as e:
+                            print(f"  ⚠ URL访问失败: {str(e)}")
+                            # 不强制失败，因为可能是网络问题或服务器临时不可用
+                            # 但记录警告信息
+                        except Exception as e:
+                            print(f"  ⚠ URL验证异常: {str(e)}")
+                    else:
+                        print(f"警告: {test_file_info['name']}响应中未找到文件URL")
                 else:
-                    print("警告: 响应中未找到文件URL")
-            else:
-                print("上传失败")
-                # 如果API未配置，跳过测试而不是失败
-                # 这里不设置断言，因为上传失败可能是由于API未配置
-                
+                    print(f"{test_file_info['name']}上传失败")
+                    # 如果API未配置，跳过测试而不是失败
+                    
         except Exception as e:
             print(f"上传测试失败: {str(e)}")
             # 如果API未配置，跳过测试
@@ -239,11 +354,41 @@ class TestAihehuoTools(unittest.TestCase):
                 raise
         finally:
             # 清理临时文件
-            if os.path.exists(test_file_path):
+            for test_file_path in test_file_paths:
+                if os.path.exists(test_file_path):
+                    try:
+                        os.unlink(test_file_path)
+                    except:
+                        pass
+        
+        # 总结上传结果并验证所有URL
+        if uploaded_urls:
+            print(f"\n=== 上传结果总结 ===")
+            print(f"成功上传 {len(uploaded_urls)} 个文件:")
+            
+            accessible_count = 0
+            for item in uploaded_urls:
+                print(f"\n{item['type']} ({item['suffix']}):")
+                print(f"  URL: {item['url']}")
+                
+                # 再次验证URL可访问性（用于总结）
                 try:
-                    os.unlink(test_file_path)
-                except:
-                    pass
+                    response = requests.get(item['url'], timeout=10, allow_redirects=True)
+                    response.raise_for_status()
+                    accessible_count += 1
+                    print(f"  ✓ 可访问 (状态码: {response.status_code}, 大小: {len(response.content)} 字节)")
+                except Exception as e:
+                    print(f"  ⚠ 访问失败: {str(e)}")
+            
+            print(f"\n总结: {accessible_count}/{len(uploaded_urls)} 个URL可以正常访问")
+            
+            # 如果所有URL都可以访问，验证通过
+            if accessible_count == len(uploaded_urls):
+                print("✓ 所有上传的文件URL都可以正常访问")
+            elif accessible_count > 0:
+                print(f"⚠ 部分URL无法访问（可能是网络问题或服务器临时不可用）")
+        else:
+            print("\n警告: 没有文件成功上传（可能是API未配置）")
 
 
 if __name__ == "__main__":

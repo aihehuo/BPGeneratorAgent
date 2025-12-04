@@ -39,6 +39,7 @@ class AgentState(TypedDict):
     pitch_result: Optional[Dict[str, Any]]
     ppt_result: Optional[Dict[str, Any]]
     partner_search_result: Optional[Dict[str, Any]]
+    html_result: Optional[Dict[str, Any]]  # HTML report generation result
     
     # Intermediate results with markdown summaries
     # Each node can set this field to provide a human-readable markdown summary
