@@ -177,7 +177,8 @@ class BPGenerationAgent:
                 print(f"Using stream mode with callback URL: {callback_url}")
                 final_state = self._execute_with_callbacks(
                     graph, inputs, callback_url, session_id, business_idea,
-                    save_report, output_file, session_dir, api_base_url
+                    save_report, output_file, session_dir, api_base_url,
+                    chat_history_manager=chat_history_manager
                 )
             else:
                 # Use invoke mode (original behavior)
@@ -371,11 +372,20 @@ class BPGenerationAgent:
                     # Upload HTML file
                     if os.path.exists(html_file_path):
                         uploaded_url = self._upload_artifact_file(html_file_path)
-                        if uploaded_url:
-                            uploaded_urls["html"] = uploaded_url
-                            print(f"✓ HTML report uploaded: {uploaded_url}")
+                    if uploaded_url:
+                        uploaded_urls["html"] = uploaded_url
+                        print(f"✓ HTML report uploaded: {uploaded_url}")
         else:
             html_file_path = None
+        
+        # Upload chat history file if available
+        if chat_history_manager:
+            chat_history_file = chat_history_manager.get_history_file_path()
+            if chat_history_file and os.path.exists(chat_history_file):
+                uploaded_url = self._upload_artifact_file(chat_history_file)
+                if uploaded_url:
+                    uploaded_urls["chat_history"] = uploaded_url
+                    print(f"✓ Chat history uploaded: {uploaded_url}")
         
         return {
             "output_file": output_path,
@@ -393,6 +403,7 @@ class BPGenerationAgent:
             "session_dir": session_dir if save_report else None,
             "input_completeness": completeness,
             "uploaded_urls": uploaded_urls,
+            "chat_history_file": chat_history_manager.get_history_file_path() if chat_history_manager else None,
         }
 
     # ---------------------------------------------------------------------- #
@@ -1622,6 +1633,17 @@ class BPGenerationAgent:
                 # Note: This case should ideally save the file, but for now we skip it
                 # to avoid breaking existing behavior when save_report=False
                 pass
+        
+        # Chat history file
+        if state.get("chat_history_file"):
+            # Prefer uploaded URL if available
+            if "chat_history" in uploaded_urls:
+                artifacts["chat_history"] = uploaded_urls["chat_history"]
+            else:
+                # Fall back to local URL
+                chat_history_file = state.get("chat_history_file")
+                filename = os.path.basename(chat_history_file)
+                artifacts["chat_history"] = f"{base_url}/api/v1/files/{session_id}/{filename}"
 
         return artifacts
 
@@ -1635,7 +1657,8 @@ class BPGenerationAgent:
         save_report: bool,
         output_file: Optional[str],
         session_dir: Optional[str],
-        api_base_url: str
+        api_base_url: str,
+        chat_history_manager: Optional[ChatHistoryManager] = None
     ) -> Dict[str, Any]:
         """
         使用 stream 模式执行 workflow 并发送 callbacks。
@@ -1696,6 +1719,14 @@ class BPGenerationAgent:
 
                     # Map node name to status key
                     status_key = status_map.get(node_name, node_name)
+
+                    # Skip callback for input_check if input is incomplete
+                    if node_name == "input_check":
+                        input_completeness = node_state.get("input_completeness", {})
+                        is_complete = input_completeness.get("is_complete", True)
+                        if not is_complete:
+                            print(f"[Callback] Skipping callback for input_check: input is incomplete")
+                            continue  # Skip sending callback for incomplete input
 
                     # Translate message to match user's language
                     message = translate_status_message(business_idea, status_key)
@@ -1835,6 +1866,16 @@ class BPGenerationAgent:
                     if uploaded_url:
                         uploaded_urls["html"] = uploaded_url
                         print(f"[文件上传] HTML报告已上传: {uploaded_url}")
+        
+        # Upload chat history file if available
+        if chat_history_manager:
+            chat_history_file = chat_history_manager.get_history_file_path()
+            if chat_history_file and os.path.exists(chat_history_file):
+                uploaded_url = self._upload_artifact_file(chat_history_file)
+                if uploaded_url:
+                    uploaded_urls["chat_history"] = uploaded_url
+                    print(f"[文件上传] 对话历史已上传: {uploaded_url}")
+                    final_state["chat_history_file"] = chat_history_file
 
         # Update final_state with file paths for artifact URL building
         final_state["output_file"] = output_path if save_report else None

@@ -214,17 +214,17 @@ class TestBPGenerationAgent(unittest.TestCase):
                 # 检查并打印HTML链接
                 if "artifacts" in completed:
                     artifacts = completed["artifacts"]
-                        html_url = artifacts["html"]
-                        
-                        # ========== 打印HTML链接（供手动查看） ==========
-                        print("\n" + "=" * 80)
-                        print("📎 HTML文件链接（可手动打开查看）:")
-                        print("=" * 80)
-                        print(html_url)
-                        print("=" * 80 + "\n")
-                        # ============================================================
-                        
-                        print(f"✅ 找到HTML链接: {html_url}")
+                    html_url = artifacts["html"]
+                    
+                    # ========== 打印HTML链接（供手动查看） ==========
+                    print("\n" + "=" * 80)
+                    print("📎 HTML文件链接（可手动打开查看）:")
+                    print("=" * 80)
+                    print(html_url)
+                    print("=" * 80 + "\n")
+                    # ============================================================
+                    
+                    print(f"✅ 找到HTML链接: {html_url}")
                 
                 # 也检查result中的uploaded_urls
                 if "uploaded_urls" in result and "html" in result["uploaded_urls"]:

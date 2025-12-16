@@ -20,9 +20,19 @@ class ProductionNodes:
 
     def generate_pitch(self, state: AgentState) -> Dict[str, Any]:
         business_idea = state["business_idea"]
+        
+        # Get complete business idea from chat history (all previous user inputs)
+        complete_business_idea = business_idea
+        if self.chat_history_manager:
+            conversation_history = self.chat_history_manager.get_conversation_history()
+            if conversation_history:
+                # Combine all previous inputs with current input
+                complete_business_idea = f"{conversation_history}\n\n{business_idea}"
+                print(f"[ProductionNodes] Using complete business idea from chat history for pitch (length: {len(complete_business_idea)} chars)")
+        
         bp_structure = state["bp_structure"]
         
-        pitch_result = self.pitch_logic.generate_pitch(business_idea, bp_structure)
+        pitch_result = self.pitch_logic.generate_pitch(complete_business_idea, bp_structure)
         
         # Note: We keep markdown_summary inside pitch_result instead of at state top level
         # to avoid conflicts when parallel nodes (pitch_gen, ppt_gen, partner_search) execute simultaneously.
@@ -49,9 +59,19 @@ class ProductionNodes:
 
     def generate_ppt(self, state: AgentState) -> Dict[str, Any]:
         business_idea = state["business_idea"]
+        
+        # Get complete business idea from chat history (all previous user inputs)
+        complete_business_idea = business_idea
+        if self.chat_history_manager:
+            conversation_history = self.chat_history_manager.get_conversation_history()
+            if conversation_history:
+                # Combine all previous inputs with current input
+                complete_business_idea = f"{conversation_history}\n\n{business_idea}"
+                print(f"[ProductionNodes] Using complete business idea from chat history for PPT (length: {len(complete_business_idea)} chars)")
+        
         bp_structure = state["bp_structure"]
         
-        ppt_result = self.ppt_logic.generate_ppt(business_idea, bp_structure)
+        ppt_result = self.ppt_logic.generate_ppt(complete_business_idea, bp_structure)
         
         # Note: We keep markdown_summary inside ppt_result instead of at state top level
         # to avoid conflicts when parallel nodes (pitch_gen, ppt_gen, partner_search) execute simultaneously.
@@ -81,12 +101,22 @@ class ProductionNodes:
             return {}
             
         business_idea = state["business_idea"]
+        
+        # Get complete business idea from chat history (all previous user inputs)
+        complete_business_idea = business_idea
+        if self.chat_history_manager:
+            conversation_history = self.chat_history_manager.get_conversation_history()
+            if conversation_history:
+                # Combine all previous inputs with current input
+                complete_business_idea = f"{conversation_history}\n\n{business_idea}"
+                print(f"[ProductionNodes] Using complete business idea from chat history for partner search (length: {len(complete_business_idea)} chars)")
+        
         bp_structure = state["bp_structure"]
         
         try:
             partner_result = self.partner_logic.run(
                 input_data={
-                    "business_idea": business_idea,
+                    "business_idea": complete_business_idea,
                     "bp_structure": bp_structure
                 },
                 partner_per_page=10,

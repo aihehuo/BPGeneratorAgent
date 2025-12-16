@@ -17,7 +17,80 @@ class InputNode:
         self.chat_history_manager = chat_history_manager
 
     def __call__(self, state: AgentState) -> Dict[str, Any]:
-        business_idea = state["business_idea"]
+        # Debug: Print the actual state structure to understand what's being passed
+        print("=" * 60)
+        print("DEBUG: InputNode received state:")
+        print(f"State type: {type(state)}")
+        print(f"State keys: {list(state.keys()) if isinstance(state, dict) else 'Not a dict'}")
+        print(f"State content: {state}")
+        print("=" * 60)
+        
+        # Handle missing required fields (e.g., when invoked through LangGraph CLI)
+        # When using generic API interfaces, treat user message/input as business_idea
+        business_idea = state.get("business_idea")
+        
+        if not business_idea:
+            # Try various common input field names
+            if "input" in state:
+                input_val = state["input"]
+                if isinstance(input_val, str):
+                    # If input is a string, use it directly as business_idea
+                    business_idea = input_val
+                elif isinstance(input_val, dict):
+                    # If input is a dict, try common field names
+                    business_idea = (
+                        input_val.get("business_idea") or 
+                        input_val.get("message") or 
+                        input_val.get("text") or 
+                        input_val.get("query") or
+                        input_val.get("prompt") or
+                        input_val.get("content")
+                    )
+            
+            # Try other common field names at top level
+            if not business_idea:
+                business_idea = (
+                    state.get("message") or 
+                    state.get("text") or 
+                    state.get("query") or 
+                    state.get("prompt") or
+                    state.get("content") or
+                    state.get("user_message")
+                )
+            
+            # If still no business_idea, check all string values in state
+            if not business_idea:
+                # Check if there's any string value that could be the business idea
+                for key, value in state.items():
+                    if isinstance(value, str) and value.strip() and key not in ["session_id", "error"]:
+                        # Use the first substantial string value found
+                        business_idea = value
+                        break
+                
+                # If still nothing, try to get any non-empty string from nested structures
+                if not business_idea:
+                    for key, value in state.items():
+                        if isinstance(value, dict):
+                            for sub_key, sub_value in value.items():
+                                if isinstance(sub_value, str) and sub_value.strip():
+                                    business_idea = sub_value
+                                    break
+                            if business_idea:
+                                break
+        
+        if not business_idea or not business_idea.strip():
+            # Provide helpful error message with actual state structure
+            state_keys = list(state.keys()) if isinstance(state, dict) else []
+            raise ValueError(
+                f"'business_idea' is required but not found in input.\n"
+                f"Received state keys: {state_keys}\n"
+                f"Please provide it as:\n"
+                f"- 'business_idea' field in the input\n"
+                f"- 'message', 'text', 'query', 'prompt', or 'content' field\n"
+                f"- Or as a string value in the 'input' field\n"
+                f"Example: {{'input': {{'message': 'Your business idea here'}}}}"
+            )
+        
         session_id = state.get("session_id")
         
         # Update chat history manager's session_id if needed

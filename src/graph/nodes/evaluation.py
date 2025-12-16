@@ -14,9 +14,19 @@ class EvaluationNode:
 
     def __call__(self, state: AgentState) -> Dict[str, Any]:
         business_idea = state["business_idea"]
+        
+        # Get complete business idea from chat history (all previous user inputs)
+        complete_business_idea = business_idea
+        if self.chat_history_manager:
+            conversation_history = self.chat_history_manager.get_conversation_history()
+            if conversation_history:
+                # Combine all previous inputs with current input
+                complete_business_idea = f"{conversation_history}\n\n{business_idea}"
+                print(f"[EvaluationNode] Using complete business idea from chat history (length: {len(complete_business_idea)} chars)")
+        
         bp_structure = state["bp_structure"]
         
-        result = self.eval_logic.evaluate_paragraphs(business_idea, bp_structure)
+        result = self.eval_logic.evaluate_paragraphs(complete_business_idea, bp_structure)
         
         # Extract markdown_summary from result if available
         markdown_summary = result.get("markdown_summary")
@@ -53,6 +63,16 @@ class PainpointNode:
 
     def __call__(self, state: AgentState) -> Dict[str, Any]:
         business_idea = state["business_idea"]
+        
+        # Get complete business idea from chat history (all previous user inputs)
+        complete_business_idea = business_idea
+        if self.chat_history_manager:
+            conversation_history = self.chat_history_manager.get_conversation_history()
+            if conversation_history:
+                # Combine all previous inputs with current input
+                complete_business_idea = f"{conversation_history}\n\n{business_idea}"
+                print(f"[PainpointNode] Using complete business idea from chat history (length: {len(complete_business_idea)} chars)")
+        
         bp_structure = state["bp_structure"] # This is a list of dicts
         
         # Find painpoint paragraph
@@ -71,7 +91,7 @@ class PainpointNode:
             return {} # No enhancement possible
             
         # Enhance
-        result = self.logic.enhance(business_idea, painpoint_para)
+        result = self.logic.enhance(complete_business_idea, painpoint_para)
         
         # Extract markdown_summary from result if available
         markdown_summary = result.get("markdown_summary")
@@ -120,13 +140,23 @@ class InvestorEvaluationWrapperNode:
 
     def __call__(self, state: AgentState) -> Dict[str, Any]:
         business_idea = state["business_idea"]
+        
+        # Get complete business idea from chat history (all previous user inputs)
+        complete_business_idea = business_idea
+        if self.chat_history_manager:
+            conversation_history = self.chat_history_manager.get_conversation_history()
+            if conversation_history:
+                # Combine all previous inputs with current input
+                complete_business_idea = f"{conversation_history}\n\n{business_idea}"
+                print(f"[InvestorEvaluationNode] Using complete business idea from chat history (length: {len(complete_business_idea)} chars)")
+        
         bp_structure = state["bp_structure"]
         
         # Store copy for history
         structure_before = [p.copy() for p in bp_structure]
         
         # Evaluate full BP
-        investor_eval = self.eval_logic.evaluate_full_bp(business_idea, bp_structure)
+        investor_eval = self.eval_logic.evaluate_full_bp(complete_business_idea, bp_structure)
         
         # Extract markdown_summary from investor_eval if available
         markdown_summary = investor_eval.get("markdown_summary")
@@ -135,8 +165,8 @@ class InvestorEvaluationWrapperNode:
         paragraph_feedbacks = investor_eval.get("paragraph_specific_feedback", [])
         final_structure = []
         
-        # Logic node for regeneration
-        structure_node = self.structure_logic_cls(self.llm, business_idea)
+        # Logic node for regeneration (use complete business idea)
+        structure_node = self.structure_logic_cls(self.llm, complete_business_idea)
         
         for idx, para in enumerate(bp_structure):
             para_title = para.get("title", f"Paragraph {idx + 1}")

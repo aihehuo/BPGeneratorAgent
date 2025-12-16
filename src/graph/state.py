@@ -2,8 +2,15 @@
 BP Agent State Definition
 """
 
-from typing import TypedDict, List, Dict, Any, Optional, Annotated
+from typing import List, Dict, Any, Optional, Annotated
 import operator
+
+# Use typing_extensions.TypedDict for Python < 3.12 compatibility with Pydantic
+try:
+    from typing_extensions import TypedDict
+except ImportError:
+    # Fallback for Python 3.12+
+    from typing import TypedDict
 
 def merge_list(list1: List[Any], list2: List[Any]) -> List[Any]:
     """Merge two lists."""

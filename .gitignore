@@ -74,3 +74,4 @@ htmlcov/
 config.py
 sessions
 aihehuo_mcp
+.langgraph_api/

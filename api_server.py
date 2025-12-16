@@ -353,6 +353,7 @@ async def generate_bp_async(request: GenerateBPAsyncRequest, http_request: Reque
     """
     try:
         agent = get_agent()
+        config = load_config()
         
         # Validate session_id if provided
         session_id = request.session_id
@@ -364,6 +365,23 @@ async def generate_bp_async(request: GenerateBPAsyncRequest, http_request: Reque
                     status_code=400,
                     detail=f"Invalid session_id format: {session_id}. Must be a valid UUID format."
                 )
+            
+            # Check if session already exists (has history)
+            # Check both session directory and chat history file
+            session_dir = os.path.join(config.output_dir, session_id)
+            chat_history_base_dir = "/tmp/bp_agent_sessions"  # Default base dir for chat history
+            chat_history_dir = os.path.join(chat_history_base_dir, session_id)
+            chat_history_file = os.path.join(chat_history_dir, "chat_history.jsonl")
+            
+            session_exists = (
+                os.path.exists(session_dir) or 
+                os.path.exists(chat_history_file)
+            )
+            
+            if session_exists:
+                print(f"[Session Check] Session {session_id} already exists (has history), will continue with existing session")
+            else:
+                print(f"[Session Check] Session {session_id} is new, will create new session")
         else:
             # Generate new session_id
             session_id = str(uuid.uuid4())

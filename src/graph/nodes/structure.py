@@ -12,8 +12,21 @@ class StructureNode:
     def generate(self, state: AgentState) -> Dict[str, Any]:
         """Generate the initial BP structure."""
         business_idea = state["business_idea"]
-        # Initialize logic node with business idea
-        node_logic = BPStructureNode(self.llm, business_idea)
+        
+        # Get complete business idea from chat history (all previous user inputs)
+        complete_business_idea = business_idea
+        if self.chat_history_manager:
+            conversation_history = self.chat_history_manager.get_conversation_history()
+            if conversation_history:
+                # Combine all previous inputs with current input
+                # Format: previous inputs (separated by \n\n) + current input
+                complete_business_idea = f"{conversation_history}\n\n{business_idea}"
+                print(f"[StructureNode] Using complete business idea from chat history (length: {len(complete_business_idea)} chars)")
+            else:
+                print(f"[StructureNode] No chat history found, using current business_idea only")
+        
+        # Initialize logic node with complete business idea
+        node_logic = BPStructureNode(self.llm, complete_business_idea)
         
         node_result = node_logic.run()
         
@@ -36,7 +49,17 @@ class StructureNode:
     def regenerate(self, state: AgentState) -> Dict[str, Any]:
         """Regenerate BP structure based on feedback."""
         business_idea = state["business_idea"]
-        node_logic = BPStructureNode(self.llm, business_idea)
+        
+        # Get complete business idea from chat history (all previous user inputs)
+        complete_business_idea = business_idea
+        if self.chat_history_manager:
+            conversation_history = self.chat_history_manager.get_conversation_history()
+            if conversation_history:
+                # Combine all previous inputs with current input
+                complete_business_idea = f"{conversation_history}\n\n{business_idea}"
+                print(f"[StructureNode] Using complete business idea from chat history for regeneration (length: {len(complete_business_idea)} chars)")
+        
+        node_logic = BPStructureNode(self.llm, complete_business_idea)
         
         evaluation_result = state["evaluation_result"]
         current_structure = state["bp_structure"]

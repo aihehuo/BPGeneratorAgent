@@ -722,28 +722,35 @@ class AihehuoClient:
             
             # 确定MIME类型
             import mimetypes
-            mime_type, _ = mimetypes.guess_type(file_path)
+            file_ext = os.path.splitext(file_path)[1].lower()
             
-            # 处理mimetypes无法识别的文件类型
-            if mime_type is None:
-                # 根据文件扩展名手动设置MIME类型
-                file_ext = os.path.splitext(file_path)[1].lower()
-                mime_type_map = {
-                    '.md': 'text/markdown',
-                    '.markdown': 'text/markdown',
-                    '.txt': 'text/plain',
-                    '.html': 'text/html',
-                    '.htm': 'text/html',
-                    '.json': 'application/json',
-                    '.xml': 'application/xml',
-                    '.pdf': 'application/pdf',
-                    '.png': 'image/png',
-                    '.jpg': 'image/jpeg',
-                    '.jpeg': 'image/jpeg',
-                    '.gif': 'image/gif',
-                    '.svg': 'image/svg+xml',
-                }
-                mime_type = mime_type_map.get(file_ext, 'application/octet-stream')
+            # 显式处理特定文件类型，确保MIME类型正确
+            # 优先使用显式映射，避免mimetypes返回错误的类型
+            mime_type_map = {
+                '.md': 'text/markdown',
+                '.markdown': 'text/markdown',
+                '.txt': 'text/plain',
+                '.html': 'text/html',
+                '.htm': 'text/html',
+                '.json': 'application/json',
+                '.jsonl': 'application/jsonl',  # JSON Lines format
+                '.xml': 'application/xml',
+                '.pdf': 'application/pdf',
+                '.png': 'image/png',
+                '.jpg': 'image/jpeg',
+                '.jpeg': 'image/jpeg',
+                '.gif': 'image/gif',
+                '.svg': 'image/svg+xml',
+            }
+            
+            # 如果文件扩展名在映射中，直接使用映射的值
+            if file_ext in mime_type_map:
+                mime_type = mime_type_map[file_ext]
+            else:
+                # 对于其他文件类型，尝试使用mimetypes猜测
+                mime_type, _ = mimetypes.guess_type(file_path)
+                if mime_type is None:
+                    mime_type = 'application/octet-stream'
             
             # 准备上传请求头（注意：multipart/form-data不需要Content-Type头，requests会自动设置）
             upload_headers = {
